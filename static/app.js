@@ -97,6 +97,10 @@
     // Book moves (opening-theory recommendations from book.db)
     bookChipRow: $("bookChipRow"),
     bookChips: $("bookChips"),
+    // Book lines passing through the current position — clicking a row
+    // loads the remainder of that line as an engine-style variation.
+    bookLinesRow: $("bookLinesRow"),
+    bookLinesList: $("bookLinesList"),
 
     // Lichess import
     lichessImportToggle: $("lichessImportToggle"),
@@ -897,7 +901,8 @@
       : `${baseMoveNum}${sideAtBase === "w" ? "…" : "."} (move ${v.basePly})`;
     const sourceLabel = v.source === "user"
       ? "your sideline"
-      : (v.engine === "lc0" ? "Lc0 variation"
+      : (v.bookLineName ? `book line: ${v.bookLineName}`
+         : v.engine === "lc0" ? "Lc0 variation"
          : v.engine === "sf" ? "SF18 variation"
          : "engine variation");
     // Convert all moves to SAN for the trailing "last move" segment.
@@ -1992,7 +1997,7 @@
    *  optional, defaults to the end — controls which point along the line
    *  is initially displayed. Keeping the full line in STATE.variation lets
    *  arrow keys step forward and backward through it without exiting. */
-  function enterVariation(basePly, uciMoves, engineKey, currentPly) {
+  function enterVariation(basePly, uciMoves, engineKey, currentPly, opts) {
     if (!uciMoves || !uciMoves.length) return;
     const moves = uciLineToMoves(STATE.positions[basePly], uciMoves);
     if (!moves.length) return;
@@ -2005,6 +2010,14 @@
       fenAfter: moves[cp - 1].fenAfter,
       engine: engineKey || null,
       source: "engine",
+      // Optional metadata for the banner — set when entering a book line so
+      // the banner reads "Viewing book line: <name>" instead of the generic
+      // "engine variation" label.
+      bookLineName: (opts && opts.bookLineName) || null,
+      // The book.db line id, used to (a) keep the matching row visible in
+      // the "Book lines through this position" list and (b) expand that
+      // row into an accordion showing the full SAN sequence + active move.
+      bookLineId: (opts && opts.bookLineId) || null,
     };
     STATE.boardObj.position(STATE.variation.fenAfter, true);
     els.variationBanner.classList.remove("hidden");
@@ -3876,6 +3889,7 @@
       STATE.bookPlayed = null;
     }
     renderBookChips();
+    renderBookLines();
     // Re-render engine blocks so book-flags get drawn next to matching
     // candidates. Skip in sideline mode (engine blocks render off the tip).
     renderEngineBlock("sf",  STATE.ply, currentDisplayedFen(), currentSideToMove());
@@ -3921,7 +3935,12 @@
       if (!byUci.has(m.uci)) byUci.set(m.uci, []);
       byUci.get(m.uci).push(m);
     }
-    for (const [uci, group] of byUci) {
+    // Cap to keep the row from sprawling at common positions. The list
+    // below already gives the deep-dive view; the chip row is just a
+    // quick "this move is in book" hint, so a single entry is plenty.
+    const BOOK_CHIPS_MAX = 1;
+    const chipEntries = Array.from(byUci.entries()).slice(0, BOOK_CHIPS_MAX);
+    for (const [uci, group] of chipEntries) {
       const chip = document.createElement("span");
       chip.className = "book-chip";
       // Tooltip: all line names + comments
@@ -3977,6 +3996,351 @@
       els.bookChips.appendChild(chip);
     }
     els.bookChipRow.classList.remove("hidden");
+  }
+
+  /** Cache: line_id → fetched-and-parsed line (so re-clicking a row, or
+   *  navigating across plies of the same line, doesn't hit the server
+   *  repeatedly). Keyed by id; one network round-trip per line per session. */
+  const BOOK_LINE_CACHE = new Map();
+
+  async function fetchBookLine(lineId) {
+    if (BOOK_LINE_CACHE.has(lineId)) return BOOK_LINE_CACHE.get(lineId);
+    const r = await fetch(`/api/book/lines/${lineId}`);
+    if (!r.ok) throw new Error(`GET /api/book/lines/${lineId} -> ${r.status}`);
+    const data = await r.json();
+    BOOK_LINE_CACHE.set(lineId, data);
+    return data;
+  }
+
+  /** From a fetched book line, walk forward from a starting move (matched by
+   *  fen_before === fromFenNorm) and collect the chain of subsequent UCI
+   *  moves on the mainline. Returns { uciList, startSan } or null if the
+   *  line doesn't reach this position.
+   *
+   *  Walks via parent_id: starting at the first move with the matching
+   *  fen_before, repeatedly look for the next move whose parent_id is the
+   *  current move's id and is_mainline=1. This handles linear Chessable
+   *  imports (where every move is mainline) AND lines with sub-variations
+   *  (we stick to the mainline path). */
+  function buildBookLineContinuation(line, fromFenNorm) {
+    if (!line || !Array.isArray(line.moves) || !line.moves.length) return null;
+    // Find the FIRST mainline move whose fen_before matches.
+    const startMove = line.moves.find(
+      (m) => bookNormalizeFen(m.fen_before) === fromFenNorm && m.is_mainline
+    ) || line.moves.find(
+      (m) => bookNormalizeFen(m.fen_before) === fromFenNorm
+    );
+    if (!startMove) return null;
+    // Index moves by parent_id for fast forward-walking.
+    const byParent = new Map();
+    for (const m of line.moves) {
+      const arr = byParent.get(m.parent_id) || [];
+      arr.push(m);
+      byParent.set(m.parent_id, arr);
+    }
+    const uciList = [];
+    let cur = startMove;
+    const guard = new Set(); // cycle safety (shouldn't happen but cheap)
+    while (cur && !guard.has(cur.id)) {
+      guard.add(cur.id);
+      uciList.push(cur.uci);
+      const kids = byParent.get(cur.id) || [];
+      // Prefer mainline child; fall back to any child if none flagged.
+      cur = kids.find((k) => k.is_mainline) || kids[0] || null;
+    }
+    return { uciList, startSan: startMove.san };
+  }
+
+  /** How many book-line rows we'll render at most. At shallow positions
+   *  (1.e4) thousands of lines match — we cap and sort by descending ply
+   *  so the "deepest match" lines bubble to the top (those are the most
+   *  specific to where the user actually is). */
+  const BOOK_LINES_MAX_ROWS = 3;
+
+  /** Don't render the list until at least this many plies into the game.
+   *  Move 3 has been played at ply 5 (1.X X  2.Y Y  3.Z) — before that
+   *  ~every opening line passes through and the list is just noise. */
+  const BOOK_LINES_MIN_PLY = 5;
+
+  /** Effective ply at the currently displayed position. In a variation
+   *  preview, ply is basePly + how far we've stepped into the variation. */
+  function currentEffectivePly() {
+    const v = STATE.variation;
+    if (v) return (v.basePly || 0) + (v.currentPly || 0);
+    return STATE.ply || 0;
+  }
+
+  /** Render the "Book lines through this position" list — one row per
+   *  unique line_id in STATE.bookHere.moves. Clicking a row loads the
+   *  remainder of that line from the current ply as a read-only engine-
+   *  style variation overlay. Hidden when there are no matching lines or
+   *  we're already inside a user sideline (same constraint as chips). */
+  function renderBookLines() {
+    if (!els.bookLinesRow || !els.bookLinesList) return;
+    const here = STATE.bookHere;
+    const fen = currentDisplayedFen();
+    els.bookLinesList.innerHTML = "";
+    const headEl = els.bookLinesRow.querySelector(".book-lines-head");
+    if (!here || !here.moves || !here.moves.length
+        || here.fenNorm !== bookNormalizeFen(fen)
+        || inUserSideline()
+        || currentEffectivePly() < BOOK_LINES_MIN_PLY) {
+      // Reset the header so a stale "showing X of Y" from a previous
+      // position doesn't linger if the row reappears via CSS.
+      if (headEl) headEl.textContent = "Book lines through this position";
+      els.bookLinesRow.classList.add("hidden");
+      return;
+    }
+    // Dedupe by line_id, keeping the DEEPEST matching move per line
+    // (highest ply). Deeper matches mean the position is well into that
+    // line — those rows are more meaningful than "this line passes through
+    // the initial position too, technically". STATE.bookHere.moves comes
+    // in is_mainline-DESC, line-name order from the backend.
+    const byLine = new Map();
+    for (const m of here.moves) {
+      const prev = byLine.get(m.line_id);
+      if (!prev || (m.ply || 0) > (prev.ply || 0)) byLine.set(m.line_id, m);
+    }
+    if (!byLine.size) {
+      els.bookLinesRow.classList.add("hidden");
+      return;
+    }
+    // Sort by descending match-ply (deepest first), then by name for
+    // stable display. Cap to BOOK_LINES_MAX_ROWS — at very shallow
+    // positions (e.g. 1.e4) the full set runs into the thousands and is
+    // useless as a click target.
+    const allRows = Array.from(byLine.values()).sort((a, b) => {
+      const dp = (b.ply || 0) - (a.ply || 0);
+      if (dp !== 0) return dp;
+      return (a.line_name || "").localeCompare(b.line_name || "");
+    });
+    const totalLines = allRows.length;
+    let rowsToShow = allRows.slice(0, BOOK_LINES_MAX_ROWS);
+    // If the user is currently inside a book-line variation, make sure
+    // the row for THAT line is shown (and pinned at the top). Without
+    // this, stepping forward into the line could drop it out of the
+    // top-N as the line gets out-ranked by deeper alternatives.
+    const activeLineId = (STATE.variation && STATE.variation.bookLineId) || null;
+    if (activeLineId) {
+      const inShown = rowsToShow.find((m) => m.line_id === activeLineId);
+      if (!inShown) {
+        const activeRep = allRows.find((m) => m.line_id === activeLineId);
+        if (activeRep) {
+          // Bump the lowest-ranked entry to make room.
+          rowsToShow = [activeRep, ...rowsToShow.slice(0, BOOK_LINES_MAX_ROWS - 1)];
+        }
+      } else {
+        // Re-order so the active line sits at the top.
+        rowsToShow = [inShown, ...rowsToShow.filter((m) => m.line_id !== activeLineId)];
+      }
+    }
+    // Update the section header so the user knows what they're seeing.
+    const head = els.bookLinesRow.querySelector(".book-lines-head");
+    if (head) {
+      head.textContent = totalLines > rowsToShow.length
+        ? `Book lines through this position — showing ${rowsToShow.length} of ${totalLines} (deepest match first)`
+        : `Book lines through this position (${totalLines})`;
+    }
+    const currentFenNorm = here.fenNorm;
+    for (const repMove of rowsToShow) {
+      const lineId = repMove.line_id;
+      const isActive = lineId === activeLineId;
+      const row = document.createElement("li");
+      row.className = "book-line-row" + (isActive ? " active expanded" : "");
+      row.title = repMove.line_name
+        + (repMove.line_source_url ? `\n${repMove.line_source_url}` : "")
+        + (isActive
+            ? "\nCurrently following — click moves below to jump, Esc to exit."
+            : "\nClick to load this line as a variation.");
+
+      // Head: side dot, name, preview, expand arrow.
+      const head = document.createElement("div");
+      head.className = "book-line-row-head";
+
+      if (repMove.line_color === "w" || repMove.line_color === "b") {
+        const dot = document.createElement("span");
+        dot.className = `book-line-side ${repMove.line_color}`;
+        head.appendChild(dot);
+      }
+
+      const name = document.createElement("span");
+      name.className = "book-line-name";
+      name.textContent = repMove.line_name || `Line #${lineId}`;
+      head.appendChild(name);
+
+      const preview = document.createElement("span");
+      preview.className = "book-line-preview";
+      preview.textContent = isActive ? "now following" : `→ ${repMove.san}`;
+      head.appendChild(preview);
+
+      const arr = document.createElement("span");
+      arr.className = "book-line-arrow";
+      arr.textContent = isActive ? "▼" : "▶";
+      head.appendChild(arr);
+
+      head.addEventListener("click", () => {
+        if (isActive) return; // already viewing — clicking the head is a no-op
+        switchToBookLine(lineId, repMove.line_name);
+      });
+
+      row.appendChild(head);
+
+      // Expansion: full SAN list of the line, with the active move
+      // highlighted. Only rendered when this row is the active one AND
+      // the line is in cache (warmed by switchToBookLine).
+      if (isActive) {
+        const cachedLine = BOOK_LINE_CACHE.get(lineId);
+        if (cachedLine) {
+          row.appendChild(buildLineExpansion(cachedLine, currentFenNorm));
+        }
+      }
+
+      els.bookLinesList.appendChild(row);
+    }
+    els.bookLinesRow.classList.remove("hidden");
+  }
+
+  /** Build the accordion expansion DOM for an active book line: SAN
+   *  tokens with move numbers, highlighting whichever move's fen_after
+   *  matches the currently displayed position. Clicking a SAN that lies
+   *  within the variation's range jumps the board to that ply. */
+  function buildLineExpansion(line, currentFenNorm) {
+    const exp = document.createElement("div");
+    exp.className = "book-line-expansion";
+    if (!line.moves || !line.moves.length) {
+      exp.textContent = "(empty line)";
+      return exp;
+    }
+    // Walk the mainline path of the line.moves tree.
+    const mainline = [];
+    const childrenOf = new Map();
+    for (const m of line.moves) {
+      const arr = childrenOf.get(m.parent_id) || [];
+      arr.push(m);
+      childrenOf.set(m.parent_id, arr);
+    }
+    let cur = (childrenOf.get(null) || []).find((m) => m.is_mainline)
+          || (childrenOf.get(null) || [])[0]
+          || null;
+    const guard = new Set();
+    while (cur && !guard.has(cur.id)) {
+      guard.add(cur.id);
+      mainline.push(cur);
+      const kids = childrenOf.get(cur.id) || [];
+      cur = kids.find((k) => k.is_mainline) || kids[0] || null;
+    }
+    // Find the active move: its fen_after matches currentFenNorm.
+    let activeIdx = -1;
+    for (let i = 0; i < mainline.length; i++) {
+      if (bookNormalizeFen(mainline[i].fen_after) === currentFenNorm) {
+        activeIdx = i;
+        break;
+      }
+    }
+    // If no fen_after matches, check fen_before of the first move (we're
+    // sitting on the line's starting position, no move played yet).
+    let beforeFirstActive = false;
+    if (activeIdx < 0 && mainline.length &&
+        bookNormalizeFen(mainline[0].fen_before) === currentFenNorm) {
+      beforeFirstActive = true;
+    }
+    // Render. SAN tokens get a move-number prefix on each whole move and
+    // an ellipsis prefix when starting with a black move.
+    let mvNumPrefixShown = -1;
+    mainline.forEach((m, i) => {
+      const mvNum = Math.floor(m.ply / 2) + (m.ply % 2 === 1 ? 1 : 0);
+      // m.ply is 1-based, odd=white. Show "N." before white moves, and
+      // "N..." before a black move that opens the line (no prior white).
+      const isWhite = (m.ply % 2 === 1);
+      if (isWhite && mvNum !== mvNumPrefixShown) {
+        const num = document.createElement("span");
+        num.className = "book-line-mvnum";
+        num.textContent = `${mvNum}.`;
+        exp.appendChild(num);
+        mvNumPrefixShown = mvNum;
+      } else if (!isWhite && i === 0) {
+        const num = document.createElement("span");
+        num.className = "book-line-mvnum";
+        num.textContent = `${mvNum}…`;
+        exp.appendChild(num);
+      }
+      const tok = document.createElement("span");
+      tok.className = "book-line-san"
+        + (i === activeIdx ? " active" : "")
+        + (m.nag ? " has-nag" : "");
+      tok.textContent = m.san + (m.nag ? m.nag : "");
+      tok.title = m.comment || `Jump to ${m.san}`;
+      tok.dataset.fenAfter = bookNormalizeFen(m.fen_after);
+      tok.addEventListener("click", (e) => {
+        e.stopPropagation();
+        jumpToBookLineMove(m);
+      });
+      exp.appendChild(tok);
+    });
+    // If we're "at the line's start" (before its first move), show a
+    // little caret at the start for clarity.
+    if (beforeFirstActive && exp.firstChild) {
+      exp.classList.add("at-start");
+    }
+    return exp;
+  }
+
+  /** Jump the active variation to the ply whose fen_after matches the
+   *  given line move. Only works when we're inside the variation for
+   *  this book line — otherwise there's nothing to navigate. */
+  function jumpToBookLineMove(lineMove) {
+    const v = STATE.variation;
+    if (!v || !v.bookLineId) return;
+    const targetFenNorm = bookNormalizeFen(lineMove.fen_after);
+    // Walk the variation's moves from basePly, find which currentPly
+    // results in fen_after === target.
+    const baseFen = STATE.positions[v.basePly];
+    const c = new Chess(baseFen);
+    for (let i = 0; i < v.moves.length; i++) {
+      const u = v.moves[i];
+      if (!c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] })) break;
+      if (bookNormalizeFen(c.fen()) === targetFenNorm) {
+        // currentPly is 1-based: i + 1 means we've played through move i.
+        goToVariationPly(i + 1);
+        return;
+      }
+    }
+    // If the target is BEFORE the variation's start (line's preamble),
+    // we can't navigate inside the variation. Silently no-op for now —
+    // jumping out of the variation to that absolute position is messy
+    // (the position may not even be in the loaded game's mainline).
+  }
+
+  /** Click handler for a book-line row. Fetches the line if not cached,
+   *  walks its mainline forward from the current FEN, and loads the
+   *  resulting UCI sequence into an engine-style variation overlay. */
+  async function switchToBookLine(lineId, lineName) {
+    if (inUserSideline()) return;
+    const fen = currentDisplayedFen();
+    const fenNorm = bookNormalizeFen(fen);
+    let line;
+    try {
+      line = await fetchBookLine(lineId);
+    } catch (e) {
+      console.warn("[chess-coach] failed to load book line", lineId, e);
+      return;
+    }
+    // STATE may have changed while fetching — re-check we're still at the
+    // same FEN. (If not, silently abort — the user navigated away.)
+    if (bookNormalizeFen(currentDisplayedFen()) !== fenNorm) return;
+    const cont = buildBookLineContinuation(line, fenNorm);
+    if (!cont || !cont.uciList.length) {
+      console.warn("[chess-coach] no continuation found for line", lineId, "at", fenNorm);
+      return;
+    }
+    try {
+      enterVariation(STATE.ply, cont.uciList, null, 1, {
+        bookLineName: lineName,
+        bookLineId: lineId,
+      });
+    } catch (e) {
+      console.warn("[chess-coach] enterVariation failed for book line", lineId, e);
+    }
   }
 
   /** Parse SAN string from the "Add Opening" form, validate with chess.js,
