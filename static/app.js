@@ -1151,7 +1151,7 @@
   // the closest ply; hover updates the tip text in the header.
   const EC_CLAMP_CP = 1000;        // y-axis clamp (±10 pawns)
   const EC_PAD = { top: 14, right: 8, bottom: 14, left: 8 };
-  const SVG_NS = "http://www.w3.org/2000/svg";
+  // SVG_NS is declared once further down in this same IIFE — reuse it.
 
   function ecMakeNode(tag, attrs) {
     const el = document.createElementNS(SVG_NS, tag);

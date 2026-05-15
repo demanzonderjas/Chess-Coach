@@ -1,17 +1,33 @@
 # Chess Coach
 
-A local web app that loads a PGN, analyzes every move with **Stockfish** (running in your browser via a Web Worker), and lets you ask **Claude** *why* a move is good or bad so you can improve your decision-making.
+A local web app for analyzing your chess games with two world-class engines side by side. Load a PGN (or import directly from Lichess), and you get Stockfish 18 running in-browser plus Lc0 running natively on your machine, with an eval timeline, plan arrows, creative/sacrifice picks, and a library that auto-saves every game you load.
 
-Everything runs on your Mac. The only thing that leaves your machine is the question + Stockfish's numbers, which the local server forwards to the Anthropic API.
+Everything runs locally. The only data that leaves your machine is Lichess game fetches (when you import) and — if you choose to enable the optional Claude coach — questions and engine numbers forwarded to the Anthropic API.
+
+## What you get
+
+The board sits on the left with an evaluation bar and on-board plan arrows for both sides. To its right are a move list with classification chips and a dedicated analysis panel showing each engine's eval, best move, full PV, and ranked alternatives. Below the board is an eval timeline chart spanning the whole game, with `??` / `?` / `!!` markers floating at the critical moments — click any point to jump there. A library panel slides in from the right with your auto-saved games (grouped by month), an openings registry, and Lichess import (single games or batches).
+
+The analysis goes beyond the standard engine bar:
+
+- **Move classification** with conservative tipping-point detection — only ~2-4 marks per game so the move list stays scannable, not noisy.
+- **Brilliant sacrifice detection** (`!!`) when you give up a minor or better and the engine sees the capture as substantially worse than declining.
+- **Creative mode** — when an engine has a sound sacrifice within tolerance (default 90cp) of the top line, it's shown as the primary pick with a "sacrifices N♟" badge. The objective top line is still shown underneath.
+- **Chaos mode** — picks deliberately unsound moves (captures, checks, material swings) within a wider eval tolerance to maximize opponent difficulty in human games. Trades engine accuracy for practical fighting chances.
+- **Plan arrows** — engine PV drawn directly on the board for the side to move, plus the opponent's plan (via null-move analysis) overlaid.
+- **Deep dive** — re-analyze the current critical position at base depth + 6 with one click.
+- **Variations** — drag pieces to explore sidelines without losing your place; engine PVs are clickable to play through them on the board.
+
+A SQLite cache makes re-opening games instant — both engines' results are persisted keyed by position, depth, and MultiPV, and deeper analyses subsume shallower ones.
 
 ## Stack
 
-- **Stockfish 18** (NNUE, WebAssembly, single-threaded build by nmrugg) — released Feb 2026, ~3970 Elo on top hardware. Runs in a Web Worker in your browser, no special CORS/COOP-COEP setup needed.
-- **Lc0** (Leela Chess Zero) — optional second engine. Native binary, run as a subprocess from Flask via `python-chess`. Comparable strength to Stockfish but very different style (pure NN + MCTS — strong positional / long-term judgment). Enables a "compare both engines" coach mode.
-- **chess.js** — PGN parsing and move legality.
-- **chessboard.js** — board UI.
-- **Flask** — tiny local server that serves the page, proxies `/api/coach` to the Anthropic API so your key stays in `.env`, and proxies `/api/analyze` to Lc0.
-- **Claude** (`claude-sonnet-4-5` by default) — generates the natural-language coaching.
+- **Stockfish 18** (NNUE, WebAssembly, single-threaded build by nmrugg) — released Feb 2026, ~3970 Elo. Runs in a Web Worker in your browser, no COOP/COEP setup required.
+- **Lc0** (Leela Chess Zero) — optional second engine. Native binary, run as a subprocess from Flask via `python-chess`. MCTS + neural network — comparable strength to Stockfish but very different style. Enables the "Both" mode that surfaces engine disagreements as teaching moments.
+- **chess.js** v0.10.3 (UMD) — PGN parsing, move legality, SAN/UCI conversion.
+- **chessboard.js** — board UI (depends on jQuery). Piece PNGs auto-download on first run.
+- **Flask** + SQLite — local server, persists the analysis cache (`analysis_cache.db`) and game/opening library (`library.db`).
+- **Claude** (`claude-sonnet-4-5` by default) — the `/api/coach` endpoint is wired up and the prompt receives both engines' verdicts, but the chat UI was removed in favor of the engine arrows + eval timeline. Re-enable in `static/index.html` if you want it back; an `ANTHROPIC_API_KEY` is only needed in that case.
 
 ## Setup
 
@@ -23,29 +39,27 @@ source .venv/bin/activate
 # 2. Install Python deps
 pip install -r requirements.txt
 
-# 3. Add your Anthropic API key
+# 3. (Optional) Configure
 cp .env.example .env
-# then open .env and paste your key on the ANTHROPIC_API_KEY= line
 ```
 
-Get an API key at <https://console.anthropic.com/settings/keys>.
+The app runs without any configuration — `.env` is only needed if you want to override defaults (Stockfish flavor, Claude model, Lc0 paths, port) or use the disabled Claude coach.
 
 ### Optional: add Lc0 as a second engine
 
-If you want the "Lc0" / "Both" engine toggles to be active, install Lc0 natively and give it a network weights file:
+To activate the **Lc0** and **Both** engine toggles, install Lc0 natively and give it a network:
 
 ```bash
-# 1. Install the engine itself
+# 1. Install the engine
 brew install lc0
 
-# 2. Download a network. Strong general-purpose nets live at
-#    https://lczero.org/play/networks/bestnets/ — pick one (a few hundred MB
-#    for a top net, much smaller for a Maia-style net) and save it as:
+# 2. Download a network from https://lczero.org/play/networks/bestnets/
+#    A few hundred MB for a top net, much smaller for a Maia-style net.
 mkdir -p ~/.local/share/lc0
 mv ~/Downloads/<network>.pb.gz ~/.local/share/lc0/weights.pb.gz
 ```
 
-Alternatively, set `LC0_NETWORK=/path/to/your/network.pb.gz` in `.env`. If Lc0 or its network isn't found, the server still boots happily — the UI just greys out the Lc0 / Both options and `/healthz` reports why.
+Alternatively, point `LC0_BINARY` and/or `LC0_NETWORK` in `.env` at custom paths. If Lc0 or its network isn't found, the server boots happily — the UI just greys out the Lc0 / Both options, and `/healthz` reports why.
 
 ## Run
 
@@ -53,50 +67,65 @@ Alternatively, set `LC0_NETWORK=/path/to/your/network.pb.gz` in `.env`. If Lc0 o
 python server.py
 ```
 
-On first run the server downloads Stockfish 18 into `static/` (~30 MB for the full `single` flavor — `.js` + `.wasm`). After that it starts immediately. Want a smaller download? Set `STOCKFISH_FLAVOR=lite-single` in `.env` (~7 MB, a bit weaker but still much stronger than human GMs).
+On first run the server downloads the Stockfish 18 WebAssembly build into `static/` (loader ~20 KB, `.wasm` ~113 MB for the full `single` flavor). After that it starts immediately. Want a smaller download? Set `STOCKFISH_FLAVOR=lite-single` in `.env` (~7 MB total, a bit weaker but still well above any human). Piece PNGs are also auto-downloaded the first time the server boots.
 
-Open <http://127.0.0.1:5173> in your browser.
+Then open <http://127.0.0.1:5173> in your browser.
 
 ## Use
 
-1. Paste a PGN into the textarea at the top and click **Load Game** (or click **Sample Game** to try one).
-2. Use **←** / **→** (or the on-screen buttons, or click any move in the list) to navigate.
-3. The position you're on gets analyzed automatically. Click **Analyze All Moves** to grind through the whole game — afterwards every move in the list is colored by classification:
-   - green underline = best move
-   - yellow = inaccuracy
-   - orange = mistake
-   - red = blunder
-4. Pick an engine in the loader bar (**SF18** / **Lc0** / **Both**). "Both" is the most interesting mode: the coach gets BOTH engines' verdicts and explicitly flags agreements/disagreements as teaching material.
-5. On the right, click one of the suggested questions (or type your own) and hit **Ask Coach**. The coach gets the FEN, the PGN so far, each enabled engine's eval before & after the move, and its best line — then answers in plain language.
+Load a game by pasting a PGN and clicking **Load PGN**, importing from Lichess via the library panel (📚 in the top bar), or hitting **+ New Game** to drag pieces from the starting position. The position you're on gets analyzed automatically as you navigate; **Analyze All** grinds the whole game in the background so the move list, classification chips, and eval timeline fill in.
 
-Keyboard shortcuts: `←` / `→` move through plies, `Home` / `End` jump to start/end, `f` flips the board, `Cmd/Ctrl+Enter` in the question box sends the question.
+Navigate with `←` / `→`, `Home` / `End`, or by clicking moves directly. `f` flips the board. `Esc` exits the current variation back to the main game line.
 
-## Tuning
+The settings row above the board controls the analysis style. **Depth** is the search depth for SF and a thinktime scale for Lc0 (16 is a sensible default; 20+ is for grinding critical positions). The engine selector picks SF18, Lc0, or both running side by side. **🔥 Creative** prefers sound sacrifice lines when they stay within the tolerance you set; **🌀 Chaos** picks deliberately offbeat moves within a wider tolerance for maximum practical difficulty; **🎯 Plans** draws each side's recommended plan as arrows on the board.
 
-- **Depth**: bump the depth input in the top-right of the loader from 16 up to ~22 for stronger analysis (slower). 16 is a good balance for live navigation; 20+ if you're really grinding a critical position.
-- **Engine flavor**: `STOCKFISH_FLAVOR=single` (default, full strength, ~30 MB), `lite-single` (~7 MB, weaker but still well above any human), or `asm` (pure-JS fallback, slow). Single-threaded variants don't require COOP/COEP headers and "just work".
-- **Model**: set `CLAUDE_MODEL` in `.env` if you want a different Claude variant.
-- **Port**: set `PORT` in `.env` (default 5173).
+The library panel (📚) auto-saves every PGN you load and lets you import games from Lichess by username (with filters for time control and rated-only) or by direct game URL. Saved games are grouped by month. The same panel houses an openings registry so the app can label what opening you're in via an "Opening:" chip in the analysis column.
+
+## Configuration
+
+All optional, set in `.env`:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...        # only needed if you re-enable the coach UI
+CLAUDE_MODEL=claude-sonnet-4-5      # alternate Claude variant for /api/coach
+
+STOCKFISH_FLAVOR=single             # "single" (default, ~113 MB) or "lite-single" (~7 MB)
+STOCKFISH_NPM_VERSION=18
+
+LC0_BINARY=/opt/homebrew/bin/lc0    # override the auto-detected Lc0 path
+LC0_NETWORK=/path/to/weights.pb.gz  # override the auto-detected network path
+
+HOST=127.0.0.1
+PORT=5173
+```
 
 ## Files
 
 ```
-server.py                          # Flask app — serves static/, proxies /api/coach to Anthropic
+server.py             # Flask app — serves static/, proxies /api/coach, /api/analyze, /api/library/*
+cache.py              # SQLite-backed analysis cache (per-position, per-engine, depth-aware)
+lc0_engine.py         # Lc0 subprocess wrapper via python-chess
+library.py            # Saved games + openings registry, Lichess import
 requirements.txt
 .env.example
+analysis_cache.db     # SQLite, created on first run
+library.db            # SQLite, created on first run
 static/
-  index.html                       # Layout
-  style.css                        # Dark theme
-  app.js                           # All client logic: PGN → positions → Stockfish → classify → ask Claude
-  stockfish-18-single.js           # Downloaded on first run (default flavor)
-  stockfish-18-single.wasm
-  img/chesspieces/wikipedia/*.png  # Downloaded on first run
+  index.html          # Layout (board | moves | analysis, with eval chart under the board)
+  style.css           # Dark theme
+  app.js              # All client logic: PGN parsing, Stockfish worker, classification,
+                      #   plan arrows, eval timeline, library, variations, coach payload
+  stockfish-18-single.js     # Auto-downloaded
+  stockfish-18-single.wasm   # Auto-downloaded (~113 MB)
+  img/chesspieces/wikipedia/*.png  # Auto-downloaded
 ```
 
-These auto-downloaded assets (`static/stockfish-*` and `static/img/chesspieces/`) are gitignored — the WASM alone is 113 MB, past GitHub's 100 MB limit. Cloning the repo and running `python server.py` will re-fetch them.
+The auto-downloaded assets are gitignored — the WASM alone exceeds GitHub's 100 MB file limit. Cloning the repo and running `python server.py` will re-fetch them. The two SQLite files are also gitignored so cloned copies start fresh.
 
 ## Notes & limits
 
-- Stockfish 18 NNUE WASM is much faster than the old asm.js builds. Expect roughly half a second per ply at depth 16 on a modern Mac — a 40-move game (80 plies) analyzes in well under a minute. *Analyze All Moves* will sequentially walk the whole game.
-- Move classification uses centipawn loss thresholds (30 / 100 / 250), the standard scheme used by most analysis tools.
-- The coach is intentionally concise (3–6 sentences per answer) and oriented around concrete lines and human-understandable principles. If you want longer or more lecture-like explanations, just ask: "explain in more detail" or "walk me through the key variation move by move".
+Stockfish 18 NNUE WASM is much faster than the old asm.js builds — roughly half a second per ply at depth 16 on a modern Mac, so a typical 40-move game analyzes in well under a minute end-to-end. Re-opening a previously-analyzed position is instant thanks to the cache. Lc0 analysis is measured in movetime rather than nodes (the nodes-based limit blew up on the Metal backend); roughly 3 seconds per move at the default depth.
+
+Move classification uses centipawn-loss thresholds (30 / 100 / 250) with an extra "tipping point" filter for the `??` / `?` chips — a move only gets a chip if the eval crossed a practical bucket boundary (winning → equal → losing), keeping the annotations focused on the moves that mattered. The eval timeline mirrors the same logic.
+
+The Claude coach endpoint is still wired up server-side and the prompt is structured to receive both engines' verdicts plus the creative and chaos picks — but the chat UI was removed from the layout. Re-enabling means restoring the `.coach-col` section in `static/index.html` and the matching listener wiring; the `askCoach()` JS function and Flask route are intact.
