@@ -1,0 +1,1181 @@
+:root {
+  --bg: #0f1115;
+  --panel: #161a22;
+  --panel-2: #1c2230;
+  --line: #2a3142;
+  --text: #e6e9ef;
+  --dim: #8a93a6;
+  --accent: #6aa9ff;
+  --accent-2: #4a86dc;
+  --good: #5dd39e;
+  --warn: #f0c27b;
+  --bad: #ff7a7a;
+  --mid: #d8b46a;
+  --shadow: 0 6px 24px rgba(0,0,0,0.25);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+button {
+  font: inherit;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+button:hover { background: #232b3d; }
+button.primary { background: var(--accent-2); border-color: var(--accent-2); color: white; }
+button.primary:hover { background: var(--accent); border-color: var(--accent); }
+button.ghost { background: transparent; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+textarea, input[type="number"] {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  width: 100%;
+  resize: vertical;
+}
+textarea:focus, input:focus { outline: 2px solid var(--accent-2); outline-offset: 0; border-color: var(--accent-2); }
+
+.topbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.topbar h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.2px; }
+.topbar .status { color: var(--dim); font-size: 12px; }
+.topbar-right { display: flex; align-items: center; gap: 14px; }
+.library-trigger {
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+.library-trigger:hover { background: var(--panel-2); border-color: var(--accent-2); color: white; }
+
+/* ---------- LOADER / HEADER TOOLBAR ----------
+   Two rows:
+     1. PGN textarea + 2x2 action grid
+     2. Pill-style settings toolbar (Depth | Engine | Creative | tolerance)
+*/
+.loader {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.loader-top {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 12px;
+  align-items: stretch;
+}
+.loader-top textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  min-height: 84px;
+  resize: vertical;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 6px;
+}
+.action-grid button {
+  font-size: 13px;
+  padding: 0 8px;
+  height: 100%;
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+.loader-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+/* Unified pill-style for every setting control in the bottom row */
+.setting {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+  box-sizing: border-box;
+}
+.setting .setting-label { color: var(--dim); font-size: 11px; }
+.setting .unit { color: var(--dim); font-size: 10px; }
+.setting input[type="number"] {
+  width: 50px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+@media (max-width: 720px) {
+  .loader-top { grid-template-columns: 1fr; }
+  .action-grid { grid-template-rows: auto; }
+}
+
+.layout {
+  display: grid;
+  /* Moves (left, narrow) | Board (center, large) | Analysis (right).
+     Sum of minimums (280 + 520 + 360 + 32 gap + 40 padding = 1232px) sits
+     well below the single-column breakpoint (1320px) so columns never
+     overflow before the layout collapses. */
+  grid-template-columns: minmax(280px, 360px) minmax(520px, 1.6fr) minmax(360px, 1fr);
+  gap: 16px;
+  padding: 16px 20px;
+  align-items: start;
+}
+
+/* BOARD */
+.board-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.board-wrap {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  width: 100%;
+  /* Center the eval-bar + board assembly inside its column. On ultra-wide
+     screens the board column gets allocated more space than the board can
+     fill (board is capped at max-width); centering keeps the position at
+     the visual center of the column instead of pinned to the left. */
+  justify-content: center;
+}
+/* Nav buttons row sits directly under the board — center it too so it
+   tracks the board's horizontal position. */
+.nav { justify-content: center; }
+.board { width: 100%; max-width: 900px; box-shadow: var(--shadow); border-radius: 8px; overflow: hidden; }
+
+/* Wrap that lets the SVG arrow overlay sit on top of the board exactly. */
+.board-arrow-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+}
+.board-arrow-wrap .board { max-width: 100%; }
+.plan-arrows {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  overflow: visible;
+}
+.plan-arrows .arrow-path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.plan-arrows .arrow-badge-circle {
+  stroke: rgba(15, 17, 21, 0.85);
+  stroke-width: 1.2;
+}
+.plan-arrows .arrow-badge-text {
+  fill: #0f1115;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+/* Emoji badge (replaces "1" on the first ply of a creative/sacrifice line).
+   No fill — emoji glyphs render in their native color. */
+.plan-arrows .arrow-badge-emoji {
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+
+/* On-board annotation overlay — mirrors the move-list "??", "?", "!!" chip
+   on the destination square of the move currently being viewed. Drawn into
+   the same SVG as the plan arrows. */
+.plan-arrows .annot-overlay text {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: none;
+}
+.plan-arrows .annot-overlay {
+  /* Subtle drop shadow so the badge reads cleanly against piece artwork. */
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+}
+/* "Should-have-played" arrow + destination ring — teal so it's clearly
+   distinct from plan-arrow palette (orange/sky). */
+.plan-arrows .annot-should-have {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+
+/* Eval bar: number ABOVE a narrow vertical bar (Lichess-style). */
+.eval-bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 56px;
+}
+.eval-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.1;
+  min-height: 32px;
+}
+.eval-num {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  letter-spacing: 0.2px;
+}
+.eval-num.positive { color: #eef2f7; }
+.eval-num.negative { color: #c8cbd1; }
+.eval-num.mate { color: var(--bad); }
+.eval-num.loading { color: var(--dim); font-style: italic; font-weight: 500; }
+.eval-meta {
+  font-size: 11px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.eval-bar {
+  position: relative;
+  width: 22px;
+  min-height: 320px;
+  flex: 1;
+  background: #2a3142;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.eval-bar-fill {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 50%;
+  background: #f1f3f5;
+  transition: height .35s ease;
+}
+.eval-bar-mid {
+  position: absolute; left: 0; right: 0; top: 50%;
+  height: 1px; background: rgba(0,0,0,0.4);
+}
+.eval-bar-loading {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 17, 21, 0.55);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+.hidden { display: none !important; }
+
+/* Spinner */
+.spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.spinner.small { width: 10px; height: 10px; border-width: 1.5px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Engine selector — three radio chips inside a single .setting pill */
+.engine-selector {
+  padding: 3px;
+  gap: 2px;
+}
+.engine-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--dim);
+  padding: 3px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+  line-height: 1;
+}
+.engine-opt input { accent-color: var(--accent); margin: 0; }
+.engine-opt:has(input:checked) {
+  background: var(--accent-2);
+  color: white;
+}
+.engine-opt.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Creative-mode toggle gets an orange accent when active */
+.creative-toggle { cursor: pointer; }
+.creative-toggle input { margin: 0; accent-color: #f0a050; }
+.creative-toggle:has(input:checked) {
+  background: linear-gradient(135deg, #5a2f1d, #7a3f23);
+  border-color: #c66a3a;
+  color: #ffd8a0;
+}
+
+/* Plans toggle (engine-line arrows) — purple/teal accent when active */
+.plans-toggle { cursor: pointer; }
+.plans-toggle input { margin: 0; accent-color: #6aa9ff; }
+.plans-toggle:has(input:checked) {
+  background: linear-gradient(135deg, #1f3a52, #25496b);
+  border-color: #5a8fcc;
+  color: #cfe1ff;
+}
+
+/* Chaos toggle — magenta/violet to signal "explicitly off-axis from
+   objective truth: practical fighting chances over correctness". */
+.chaos-toggle { cursor: pointer; }
+.chaos-toggle input { margin: 0; accent-color: #c084fc; }
+.chaos-toggle:has(input:checked) {
+  background: linear-gradient(135deg, #3a1f4e, #4d2a64);
+  border-color: #b070d8;
+  color: #e9d3ff;
+}
+
+/* Sacrifice badge next to the best move (when creative pick is shown) */
+.sacrifice-badge {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(240, 160, 80, 0.18);
+  color: #ffb874;
+  border: 1px solid rgba(240, 160, 80, 0.4);
+  vertical-align: middle;
+}
+
+/* Highlight the engine block lines when a creative sacrifice is the
+   current primary pick. */
+.engine-block.creative .engine-head::after {
+  content: "🔥";
+  font-size: 11px;
+  margin-left: 4px;
+}
+.engine-block.creative #sfMoveLabel,
+.engine-block.creative #lc0MoveLabel,
+.engine-block.creative #sfLineLabel,
+.engine-block.creative #lc0LineLabel { color: #ffb874; }
+
+/* Same treatment for chaos picks — violet/magenta accent for "this is
+   the deliberately-unsound, hardest-to-defend pick". */
+.engine-block.chaos .engine-head::after {
+  content: "🌀";
+  font-size: 11px;
+  margin-left: 4px;
+}
+.engine-block.chaos #sfMoveLabel,
+.engine-block.chaos #lc0MoveLabel,
+.engine-block.chaos #sfLineLabel,
+.engine-block.chaos #lc0LineLabel { color: #d8b4fe; }
+.engine-block.chaos .sacrifice-badge {
+  background: rgba(192, 132, 252, 0.18);
+  color: #e9d3ff;
+  border-color: rgba(192, 132, 252, 0.45);
+}
+
+/* "Engine top:" secondary line when creative pick is shown as primary */
+.line-alt {
+  font-size: 12px;
+  color: var(--dim);
+  opacity: 0.85;
+  margin-top: 2px;
+}
+.line-alt .alt-eval {
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+
+/* Compact list of additional candidate lines, shown below the primary.
+   Each row: rank badge, eval chip, then the clickable PV. */
+.candidates-list {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
+.candidates-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+  margin-bottom: 4px;
+}
+.candidates-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.candidates-rows .cand-row {
+  display: grid;
+  grid-template-columns: 18px 48px 1fr;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  opacity: 0.92;
+}
+.candidates-rows .cand-rank {
+  color: var(--dim);
+  font-size: 10px;
+  text-align: right;
+}
+.candidates-rows .cand-eval {
+  color: var(--dim);
+  font-weight: 600;
+}
+.candidates-rows .cand-eval.positive { color: #cfd6e0; }
+.candidates-rows .cand-eval.negative { color: #9aa1ad; }
+.candidates-rows .cand-eval.mate     { color: var(--bad); }
+.candidates-rows .cand-line { min-width: 0; }
+.candidates-rows .cand-line .pv-move { font-size: 12px; padding: 0 3px; }
+
+/* Move-info dual-engine blocks */
+.engine-block {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.engine-block:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+.engine-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.engine-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  color: white;
+}
+.engine-tag.sf  { background: #4a86dc; }
+.engine-tag.lc0 { background: #b07eda; }
+.engine-line-eval {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+}
+.engine-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--dim);
+  margin-left: auto;
+  width: 14px;     /* reserve space so the spinner appearing/disappearing
+                      doesn't cause the engine-head row to shift */
+  height: 14px;
+  flex: 0 0 14px;
+}
+.engine-status.analyzing::before {
+  content: "";
+  width: 10px; height: 10px;
+  border: 1.5px solid rgba(255,255,255,0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* Deep-dive button — small ghost button living in the SF engine-head row.
+   Re-runs the SF analysis at base depth + 6 for the current ply (and its
+   predecessor, for classification consistency). Auto-hides when not
+   applicable; auto-disables when the position is already at deep depth. */
+.deep-dive-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  border-radius: 5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.deep-dive-btn:hover:not(:disabled) {
+  background: var(--panel-2);
+  color: var(--text);
+  border-color: var(--accent-2);
+}
+.deep-dive-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.deep-dive-btn.is-deep {
+  color: #ffd270;
+  border-color: rgba(255, 210, 112, 0.35);
+}
+.deep-dive-btn.hidden { display: none; }
+
+/* Clickable PV moves — each move in the "best line" is a chip you can
+   click to jump the board to that hypothetical position. */
+.pv-line {
+  display: inline;
+  font-variant-numeric: tabular-nums;
+}
+.pv-move {
+  display: inline-block;
+  padding: 1px 4px;
+  margin: 0 1px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background .1s, color .1s;
+}
+.pv-move:hover { background: var(--panel-2); color: white; }
+.pv-move.active {
+  background: var(--accent-2);
+  color: white;
+  font-weight: 600;
+}
+
+/* Variation mode: when the board shows an engine variation rather than the
+   actual game position, we show a banner so the user always knows. */
+.board-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.variation-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: rgba(106, 169, 255, 0.12);
+  border: 1px solid rgba(106, 169, 255, 0.35);
+  border-radius: 8px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+.variation-banner button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  font-size: 12px;
+  margin-left: auto;
+}
+.variation-banner button.link:hover { color: white; }
+.board.in-variation { box-shadow: 0 0 0 2px var(--accent-2), var(--shadow); }
+
+.nav { display: flex; gap: 6px; flex-wrap: wrap; }
+.nav button { padding: 6px 10px; min-width: 44px; }
+
+/* -------------------- EVAL CHART --------------------
+   SVG line chart of the game's evaluation over time. Sits below the
+   board, full width of the board column. White's cp on a +1000…-1000
+   scale (clamped); 0-line in the middle. Classification markers ("??",
+   "?", "!!") float above critical plies. Clicking a ply jumps the
+   board there. */
+.eval-chart-wrap {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.eval-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.eval-chart-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+}
+.eval-chart-tip {
+  font-size: 11px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  min-height: 14px;
+}
+.eval-chart {
+  width: 100%;
+  height: 120px;
+  display: block;
+  cursor: crosshair;
+}
+.eval-chart .ec-bg-white { fill: #f1f3f5; opacity: 0.07; }
+.eval-chart .ec-bg-black { fill: #0f1115; opacity: 0.55; }
+.eval-chart .ec-zero {
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.eval-chart .ec-grid {
+  stroke: rgba(255, 255, 255, 0.05);
+  stroke-width: 1;
+}
+.eval-chart .ec-area {
+  fill: rgba(241, 243, 245, 0.18);
+}
+.eval-chart .ec-line {
+  fill: none;
+  stroke: #e6e9ef;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.eval-chart .ec-dot {
+  fill: rgba(230, 233, 239, 0.55);
+  cursor: pointer;
+  transition: r 0.1s, fill 0.1s;
+}
+.eval-chart .ec-dot.cls-blunder  { fill: var(--bad);    }
+.eval-chart .ec-dot.cls-mistake  { fill: #ff9a4a;       }
+.eval-chart .ec-dot.cls-inacc    { fill: var(--warn);   }
+.eval-chart .ec-dot.cls-brilliant{ fill: var(--good);   }
+.eval-chart .ec-dot:hover { r: 5; fill: var(--accent); }
+.eval-chart .ec-dot.active {
+  fill: var(--accent);
+  stroke: white;
+  stroke-width: 1.5;
+}
+.eval-chart .ec-mark-bg {
+  fill: var(--panel-2);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.eval-chart .ec-mark-bg.cls-blunder  { stroke: var(--bad);  }
+.eval-chart .ec-mark-bg.cls-mistake  { stroke: #ff9a4a;     }
+.eval-chart .ec-mark-bg.cls-brilliant{ stroke: var(--good); }
+.eval-chart .ec-mark-text {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 700;
+  font-size: 10px;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  letter-spacing: -0.5px;
+}
+.eval-chart .ec-mark-text.cls-blunder  { fill: var(--bad);  }
+.eval-chart .ec-mark-text.cls-mistake  { fill: #ff9a4a;     }
+.eval-chart .ec-mark-text.cls-brilliant{ fill: var(--good); }
+.eval-chart .ec-hit {
+  fill: transparent;
+  cursor: pointer;
+}
+.eval-chart .ec-empty {
+  fill: var(--dim);
+  font-size: 11px;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.move-info {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.move-info .k { color: var(--dim); display: inline-block; min-width: 110px; }
+.move-info .line { font-variant-numeric: tabular-nums; }
+.move-info .dim { color: var(--dim); font-size: 11px; }
+
+.classification { margin-top: 4px; font-weight: 600; }
+.classification.best   { color: var(--good); }
+.classification.good   { color: #b6e3c8; }
+.classification.inacc  { color: var(--warn); }
+.classification.mistake{ color: #ff9a4a; }
+.classification.blunder{ color: var(--bad); }
+
+/* MOVE LIST */
+.moves-col {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  max-height: 85vh;
+  overflow-y: auto;
+  /* Sticky so the move list stays in view as the user scrolls the page
+     (e.g. when the eval chart pushes content below the fold). Matches
+     analysis-col's behavior on the right. */
+  position: sticky;
+  top: 16px;
+}
+.moves-col h2 { margin: 0 0 8px; font-size: 13px; color: var(--dim); font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; }
+.move-list { list-style: none; padding: 0; margin: 0; }
+.move-list li {
+  display: grid;
+  grid-template-columns: 28px 1fr 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-variant-numeric: tabular-nums;
+}
+.move-list .num { color: var(--dim); font-size: 12px; text-align: right; padding-right: 4px; }
+.move-list .move {
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.move-list .move-san { font-weight: 500; }
+.move-list .move-eval {
+  font-size: 10px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  padding-left: 4px;
+  opacity: 0.85;
+}
+/* Small annotation chip between the SAN and the eval — chess-style marks
+   (??, ?, ?!, !, !!) plus an optional 🔥 for sacrifices the player made. */
+.move-list .move-annot {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1;
+  padding-left: 3px;
+}
+.move-list .move-annot .annot-mark {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+.move-list .move-annot .annot-fire {
+  font-size: 11px;
+  filter: saturate(1.1);
+}
+.move-list .move-annot.best    .annot-mark { color: var(--good); }
+.move-list .move-annot.inacc   .annot-mark { color: var(--warn); }
+.move-list .move-annot.mistake .annot-mark { color: #ff9a4a; }
+.move-list .move-annot.blunder .annot-mark { color: var(--bad); }
+.move-list .move:hover { background: var(--panel-2); }
+.move-list .move.active { background: var(--accent-2); color: white; }
+.move-list .move.active .move-eval { color: rgba(255,255,255,0.85); opacity: 1; }
+/* Only tipping-point classifications get a colored underline now — best
+   and inacc never paint, even when classified internally. */
+.move-list .move.mistake { box-shadow: inset 0 -2px 0 #ff9a4a; }
+.move-list .move.blunder { box-shadow: inset 0 -2px 0 var(--bad); }
+.move-list .move.brilliant { box-shadow: inset 0 -2px 0 var(--good); }
+
+/* Session-only sideline row inserted into the move list right after the
+   pair containing the basePly. Visually distinct (indented, dimmer,
+   labeled "Your line") so it doesn't compete with the main moves. */
+.move-list .sideline-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 6px;
+  align-items: baseline;
+  margin: 2px 0 2px 14px;        /* indent under the pair it branches from */
+  padding: 4px 6px 4px 10px;
+  border-left: 2px solid var(--accent-2);
+  background: rgba(74, 134, 220, 0.05);
+  border-radius: 4px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.move-list .sideline-row .sideline-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.move-list .sideline-row .sideline-moves {
+  color: var(--text);
+  min-width: 0;
+}
+.move-list .sideline-row .sideline-num {
+  color: var(--dim);
+  margin-right: 2px;
+  margin-left: 3px;
+}
+.move-list .sideline-row .sideline-num:first-child { margin-left: 0; }
+.move-list .sideline-row .sideline-move {
+  display: inline-block;
+  padding: 0 3px;
+  margin: 0 1px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background 0.1s;
+}
+.move-list .sideline-row .sideline-move:hover {
+  background: var(--panel-2);
+}
+.move-list .sideline-row .sideline-move.active {
+  background: var(--accent-2);
+  color: white;
+  font-weight: 600;
+}
+.move-list .sideline-row .sideline-close {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.move-list .sideline-row .sideline-close:hover {
+  color: var(--bad);
+  background: rgba(255, 122, 122, 0.1);
+}
+
+/* ANALYSIS COLUMN — dedicated home for engine output (SF/Lc0 best move,
+   PV, eval, alternatives, classification). Replaces the old coach column. */
+.analysis-col {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex; flex-direction: column;
+  gap: 10px;
+  max-height: 85vh;
+  overflow-y: auto;
+  position: sticky;
+  top: 16px;
+}
+.analysis-col h2 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dim);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+/* Inside the analysis column, the move-info container loses its outer
+   chrome (the column itself already has a border/background). */
+.analysis-col .move-info {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+
+/* -------------------- LIBRARY PANEL --------------------
+   Slide-in side panel on the right edge for browsing saved games and
+   managing the openings registry. Auto-saved on every PGN load — the
+   panel is the primary way to re-load past games and add new openings. */
+.library-panel {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 360px;
+  max-width: 95vw;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(0);
+  transition: transform 0.18s ease;
+}
+.library-panel.hidden {
+  transform: translateX(105%);
+  pointer-events: none;
+  display: flex !important; /* still rendered, just slid off-screen */
+}
+.library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.library-tabs { display: flex; gap: 4px; }
+.library-tabs button {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.library-tabs button.active {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.library-close {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-size: 22px;
+  line-height: 1;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.library-close:hover { color: var(--text); }
+.library-tab {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px 16px;
+  display: none;
+}
+.library-tab.active { display: block; }
+.library-empty {
+  color: var(--dim);
+  font-size: 13px;
+  text-align: center;
+  padding: 32px 12px;
+}
+.library-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+/* Month-section divider inside the games list. It's an <li> so it
+   shares the .library-list li rule but we strip all the row chrome
+   (border-box, grid, padding, hover) — it's a header, not a row. */
+.library-list .library-month-header {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--dim);
+  padding: 10px 4px 4px;
+  margin-top: 6px;
+  border: none;
+  border-top: 1px solid var(--line);
+  background: none;
+  border-radius: 0;
+  cursor: default;
+  grid-template-columns: none;
+}
+.library-list .library-month-header:hover {
+  border-color: var(--line);
+  background: none;
+}
+.library-list .library-month-header:first-child {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+.library-list li {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  align-items: center;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+}
+.library-list li:hover { border-color: var(--accent-2); }
+.library-list .row-title { color: var(--text); font-weight: 600; }
+.library-list .row-meta  { color: var(--dim);  font-size: 11px; }
+.library-list .row-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(106, 169, 255, 0.15);
+  color: var(--accent);
+  border: 1px solid rgba(106, 169, 255, 0.35);
+  margin-right: 4px;
+}
+.library-list .row-delete {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--dim);
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.library-list .row-delete:hover { color: var(--bad); border-color: var(--bad); background: rgba(255, 122, 122, 0.1); }
+
+.library-add-toggle {
+  width: 100%;
+  margin-bottom: 8px;
+  font-size: 12px;
+  padding: 6px;
+}
+.library-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 10px;
+  background: var(--panel-2);
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.library-add-form input,
+.library-add-form textarea {
+  font-size: 12px;
+  padding: 6px 8px;
+}
+.library-form-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.library-form-row button { padding: 4px 10px; font-size: 12px; }
+.library-form-error {
+  color: var(--bad);
+  font-size: 11px;
+  flex: 1;
+  text-align: right;
+}
+.library-form-error.ok { color: var(--good); }
+.library-form-divider {
+  display: flex;
+  align-items: center;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--dim);
+  letter-spacing: 0.5px;
+  margin: 4px 0 0;
+}
+.library-form-divider::before,
+.library-form-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+  margin: 0 8px;
+}
+.library-form-hint {
+  font-size: 10px;
+  color: var(--dim);
+  flex: 1;
+  text-align: right;
+  line-height: 1.3;
+}
+.library-inline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.library-inline-label input[type="number"] {
+  width: 60px;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.library-inline-check { gap: 4px; }
+.library-inline-check input { margin: 0; }
+.library-inline-select {
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+
+/* User-color badge in game rows (W / B) */
+.library-list .row-color {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 4px;
+  border: 1px solid var(--line);
+}
+.library-list .row-color.w { background: #f1f3f5; color: #0f1115; }
+.library-list .row-color.b { background: #0f1115; color: #e6e9ef; border-color: #555; }
+
+/* Opening chip in the move-info panel */
+.opening-chip {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(106, 169, 255, 0.15);
+  color: var(--accent);
+  border: 1px solid rgba(106, 169, 255, 0.35);
+}
+
+.footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 12px;
+  text-align: center;
+}
+
+.dim { color: var(--dim); }
+
+/* On narrow screens (laptops, tablets) collapse the 3-column layout into
+   a single stacked column. The new wider board + wider moves column push
+   the combined minimum past ~1300px, so the breakpoint had to move up
+   from the previous 1100px. */
+@media (max-width: 1320px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .moves-col, .analysis-col { max-height: none; position: static; }
+  /* When stacked, the board doesn't need to be centered inside its column —
+     the column IS the viewport. Let the board start at the left edge so it
+     lines up with the moves panel above and analysis panel below. */
+  .board-wrap { justify-content: flex-start; }
+  .nav { justify-content: flex-start; }
+}

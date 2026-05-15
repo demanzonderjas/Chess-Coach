@@ -1,0 +1,58 @@
+# --- Secrets & local config ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test / coverage artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+# --- Project-specific ---
+# SQLite analysis cache — local, regenerated on demand
+analysis_cache.db
+analysis_cache.db-journal
+analysis_cache.db-wal
+analysis_cache.db-shm
+
+# Engine + piece assets — auto-downloaded by server.py on first run.
+# The .wasm is also >100 MB which exceeds GitHub's file size limit.
+static/stockfish-*
+static/img/chesspieces/
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+logs/

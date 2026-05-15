@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chess Coach</title>
+
+  <!-- chessboard.js styles -->
+  <link rel="stylesheet"
+        href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Chess Coach</h1>
+    <div class="topbar-right">
+      <button id="libraryBtn" class="library-trigger" title="Open your saved games + opening library">📚 Library</button>
+      <div class="status" id="engineStatus">Engine: loading…</div>
+    </div>
+  </header>
+
+  <!-- Library side panel — slides in from the right when toggled. -->
+  <aside class="library-panel hidden" id="libraryPanel" aria-hidden="true">
+    <div class="library-head">
+      <div class="library-tabs" role="tablist">
+        <button class="active" data-tab="games" role="tab">Games</button>
+        <button data-tab="openings" role="tab">Openings</button>
+      </div>
+      <button class="library-close" id="libraryCloseBtn" aria-label="Close library">×</button>
+    </div>
+    <div class="library-tab active" data-tab="games" id="libraryGamesTab">
+      <button id="lichessImportToggle" class="library-add-toggle">↘ Import from Lichess</button>
+      <form class="library-add-form hidden" id="lichessImportForm">
+        <input type="text" id="lichessUsername" placeholder="Lichess username (e.g. demanzonderjas)" required>
+        <div class="library-form-row">
+          <label class="library-inline-label">Max
+            <input type="number" id="lichessMax" min="1" max="300" step="10" value="50">
+          </label>
+          <select id="lichessPerf" class="library-inline-select" title="Filter by time control">
+            <option value="">any time control</option>
+            <option value="bullet">bullet</option>
+            <option value="blitz">blitz</option>
+            <option value="rapid">rapid</option>
+            <option value="classical">classical</option>
+            <option value="correspondence">correspondence</option>
+          </select>
+          <label class="library-inline-label library-inline-check" title="Only include rated games">
+            <input type="checkbox" id="lichessRated"> rated only
+          </label>
+        </div>
+        <div class="library-form-row">
+          <button type="submit" class="primary" id="lichessImportSubmit">Import</button>
+          <button type="button" class="ghost" id="lichessImportCancel">Cancel</button>
+          <span class="library-form-error" id="lichessImportStatus"></span>
+        </div>
+        <div class="library-form-divider">or import a single game directly</div>
+        <input type="text" id="lichessGameUrl" placeholder="Game URL or ID (e.g. https://lichess.org/AbCdEfGh)">
+        <div class="library-form-row">
+          <button type="button" class="primary" id="lichessImportGameSubmit">Import game</button>
+          <span class="library-form-hint">Use this when Lichess hasn't indexed your just-finished game yet</span>
+        </div>
+      </form>
+      <div class="library-empty hidden" id="libraryGamesEmpty">No games yet — load a PGN or import from Lichess to start your library.</div>
+      <ul class="library-list" id="libraryGamesList"></ul>
+    </div>
+    <div class="library-tab" data-tab="openings" id="libraryOpeningsTab">
+      <button id="addOpeningToggle" class="library-add-toggle">+ Add Opening</button>
+      <form class="library-add-form hidden" id="addOpeningForm">
+        <input type="text" id="newOpeningName" placeholder="Opening name (e.g. Italian Game)" maxlength="100" required>
+        <textarea id="newOpeningMoves" rows="2" placeholder="SAN moves (e.g. 1. e4 e5 2. Nf3 Nc6 3. Bc4)" required></textarea>
+        <div class="library-form-row">
+          <button type="submit" class="primary">Save opening</button>
+          <button type="button" class="ghost" id="addOpeningCancel">Cancel</button>
+          <span class="library-form-error" id="addOpeningError"></span>
+        </div>
+      </form>
+      <div class="library-empty hidden" id="libraryOpeningsEmpty">No openings registered yet.</div>
+      <ul class="library-list" id="libraryOpeningsList"></ul>
+    </div>
+  </aside>
+
+  <section class="loader">
+    <div class="loader-top">
+      <textarea id="pgnInput" placeholder="Paste a PGN to load a game — or click + New Game to start exploring from scratch.&#10;Example: 1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 *"></textarea>
+      <div class="action-grid">
+        <button id="loadBtn" class="primary">Load PGN</button>
+        <button id="newGameBtn" title="Drag pieces on the board to explore positions from scratch">+ New Game</button>
+        <button id="loadSampleBtn" class="ghost">Sample Game</button>
+        <button id="analyzeAllBtn" title="Run the selected engine(s) on every move of the current game">Analyze All</button>
+      </div>
+    </div>
+    <div class="loader-settings" aria-label="Engine settings">
+      <label class="setting" title="Search depth (SF) / thinktime scale (Lc0). 16 = sweet spot; 20+ for deep dives.">
+        <span class="setting-label">Depth</span>
+        <input type="number" id="depthInput" min="8" max="22" value="16" />
+      </label>
+      <div class="setting engine-selector" role="radiogroup" aria-label="Engine">
+        <label class="engine-opt"><input type="radio" name="engine" value="stockfish" checked> SF18</label>
+        <label class="engine-opt" id="engineOptLc0"><input type="radio" name="engine" value="lc0"> Lc0</label>
+        <label class="engine-opt" id="engineOptBoth"><input type="radio" name="engine" value="both"> Both</label>
+      </div>
+      <label class="setting creative-toggle" title="Prefer engine lines that sacrifice material when they stay within the eval tolerance">
+        <input type="checkbox" id="creativeMode" checked> 🔥 Creative
+      </label>
+      <label class="setting creative-threshold" title="Max eval drop (in centipawns) for a sacrifice line to count as 'sound'.">
+        <span class="setting-label">tolerance</span>
+        <input type="number" id="creativeThreshold" min="10" max="300" step="5" value="90">
+        <span class="unit">cp</span>
+      </label>
+      <label class="setting chaos-toggle" title="Pick offbeat moves that maximize opponent difficulty — captures, checks, material swings — even when eval drops up to the tolerance below. Trades objective accuracy for practical fighting chances. Wider MultiPV (12) so this can be slower.">
+        <input type="checkbox" id="chaosMode"> 🌀 Chaos
+      </label>
+      <label class="setting chaos-threshold" title="Max eval drop (cp) a chaos pick may sacrifice vs the engine's top line. Wider than the creative tolerance — chaos is explicitly unsound by engine standards.">
+        <span class="setting-label">chaos cp</span>
+        <input type="number" id="chaosThreshold" min="50" max="400" step="10" value="150">
+      </label>
+      <label class="setting plans-toggle" title="Show planned-move arrows for both sides — the side to move's plan, and (via null-move analysis) the opponent's plan if it were their turn.">
+        <input type="checkbox" id="plansToggle" checked> 🎯 Plans
+      </label>
+      <label class="setting plans-plies" title="How many plies of each plan to draw as arrows.">
+        <span class="setting-label">plies</span>
+        <input type="number" id="plansPlies" min="1" max="6" step="1" value="4">
+      </label>
+    </div>
+  </section>
+
+  <main class="layout">
+    <!-- MOVE LIST COLUMN (left) -->
+    <section class="moves-col">
+      <h2>Moves</h2>
+      <ol id="moveList" class="move-list"></ol>
+    </section>
+
+    <!-- BOARD COLUMN (center) -->
+    <section class="board-col">
+      <div class="board-wrap">
+        <div class="eval-bar-col">
+          <div class="eval-readout" id="evalReadout">
+            <span class="eval-num" id="evalNum">—</span>
+            <span class="eval-meta" id="evalMeta"></span>
+          </div>
+          <div id="evalBar" class="eval-bar" aria-label="Static evaluation bar">
+            <div class="eval-bar-fill" id="evalBarFill"></div>
+            <div class="eval-bar-mid"></div>
+            <div class="eval-bar-loading hidden" id="evalLoading" aria-label="Analyzing position">
+              <div class="spinner"></div>
+            </div>
+          </div>
+        </div>
+        <div class="board-stack">
+          <div id="variationBanner" class="variation-banner hidden">
+            <span id="variationBannerText">Viewing variation</span>
+            <button id="exitVariationBtn" class="link">← back to game (Esc)</button>
+          </div>
+          <div class="board-arrow-wrap">
+            <div id="board" class="board"></div>
+            <!-- SVG overlay for plan arrows. Drawn on top of the board with
+                 pointer-events:none so clicks/drags pass through. -->
+            <svg id="planArrows" class="plan-arrows" aria-hidden="true"></svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="nav">
+        <button id="navStart" title="Start (Home)">⏮</button>
+        <button id="navPrev" title="Previous (←)">◀</button>
+        <button id="navNext" title="Next (→)">▶</button>
+        <button id="navEnd" title="End (End)">⏭</button>
+        <button id="flipBtn" title="Flip board (f)">⇅ Flip</button>
+      </div>
+
+      <!-- Eval timeline chart — White-perspective cp across the game,
+           with ??/?/!! markers at the critical moments. Click a point
+           to jump to that ply. -->
+      <div class="eval-chart-wrap" id="evalChartWrap">
+        <div class="eval-chart-head">
+          <span class="eval-chart-title">Game evaluation</span>
+          <span class="eval-chart-tip" id="evalChartTip"></span>
+        </div>
+        <svg id="evalChart" class="eval-chart" preserveAspectRatio="none" aria-label="Game evaluation over time"></svg>
+      </div>
+
+    </section>
+
+    <!-- ANALYSIS COLUMN — engine eval, best move, PV, candidates -->
+    <section class="analysis-col">
+      <h2>Analysis</h2>
+      <div class="move-info" id="moveInfo">
+        <div class="line hidden" id="openingChipRow">
+          <span class="k">Opening:</span>
+          <span class="opening-chip" id="openingChip">—</span>
+        </div>
+        <div class="line"><span class="k">Move:</span> <span id="curMove">—</span></div>
+        <div class="line"><span class="k">Side to move:</span> <span id="sideToMove">—</span></div>
+
+        <div class="engine-block" id="sfBlock">
+          <div class="engine-head"><span class="engine-tag sf">SF18</span>
+            <span class="engine-line-eval" id="sfEvalText">—</span>
+            <span class="dim" id="sfEvalDepth"></span>
+            <button id="deepDiveBtn" class="deep-dive-btn" title="Re-analyze this position (and its predecessor, for classification consistency) at base depth + 6.">🔍 Deep dive</button>
+            <span class="engine-status" id="sfStatus"></span>
+          </div>
+          <div class="line"><span class="k" id="sfMoveLabel">Best move:</span>
+            <span id="sfBestMove">—</span>
+            <span class="sacrifice-badge hidden" id="sfSacBadge"></span>
+          </div>
+          <div class="line"><span class="k" id="sfLineLabel">Best line:</span> <span id="sfBestLine">—</span></div>
+          <div class="line line-alt hidden" id="sfAltBlock">
+            <span class="k">Engine top:</span>
+            <span id="sfAltMove">—</span>
+            <span class="alt-eval" id="sfAltEval"></span>
+          </div>
+          <div class="candidates-list hidden" id="sfCandidates">
+            <div class="candidates-head">Alternatives</div>
+            <ol class="candidates-rows" id="sfCandidatesRows"></ol>
+          </div>
+        </div>
+
+        <div class="engine-block hidden" id="lc0Block">
+          <div class="engine-head"><span class="engine-tag lc0">Lc0</span>
+            <span class="engine-line-eval" id="lc0EvalText">—</span>
+            <span class="dim" id="lc0EvalDepth"></span>
+            <span class="engine-status" id="lc0Status"></span>
+          </div>
+          <div class="line"><span class="k" id="lc0MoveLabel">Best move:</span>
+            <span id="lc0BestMove">—</span>
+            <span class="sacrifice-badge hidden" id="lc0SacBadge"></span>
+          </div>
+          <div class="line"><span class="k" id="lc0LineLabel">Best line:</span> <span id="lc0BestLine">—</span></div>
+          <div class="line line-alt hidden" id="lc0AltBlock">
+            <span class="k">Engine top:</span>
+            <span id="lc0AltMove">—</span>
+            <span class="alt-eval" id="lc0AltEval"></span>
+          </div>
+          <div class="candidates-list hidden" id="lc0Candidates">
+            <div class="candidates-head">Alternatives</div>
+            <ol class="candidates-rows" id="lc0CandidatesRows"></ol>
+          </div>
+        </div>
+
+        <div class="line classification" id="classification"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Open-source: Stockfish (engine) · chess.js (rules) · chessboard.js (UI) · Claude (coaching)</span>
+  </footer>
+
+  <!-- Libraries -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <!-- chess.js 0.10.3 UMD build — exposes window.Chess.
+       (Newer versions on jsDelivr ship ESM `export` syntax which breaks
+       when loaded as a classic <script>.) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
