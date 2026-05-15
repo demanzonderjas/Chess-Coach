@@ -752,7 +752,48 @@ textarea:focus, input:focus { outline: 2px solid var(--accent-2); outline-offset
   position: sticky;
   top: 16px;
 }
-.moves-col h2 { margin: 0 0 8px; font-size: 13px; color: var(--dim); font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; }
+.moves-col h2 { margin: 0; font-size: 13px; color: var(--dim); font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; }
+.moves-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+/* Save-to-library button — small ghost, accent-bordered when there's
+   something to save. Three visual states: disabled (nothing to save),
+   active "💾 Save" (current game is unsaved), and "✓ Saved" (current
+   game state matches a library entry). */
+.save-game-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  line-height: 1.3;
+  white-space: nowrap;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.save-game-btn:hover:not(:disabled) {
+  background: rgba(106, 169, 255, 0.12);
+  border-color: var(--accent-2);
+  color: white;
+}
+.save-game-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.save-game-btn.is-saved {
+  color: var(--good);
+  border-color: rgba(93, 211, 158, 0.4);
+  background: rgba(93, 211, 158, 0.08);
+}
+.save-game-btn.is-saved:hover:not(:disabled) {
+  background: rgba(93, 211, 158, 0.15);
+  border-color: var(--good);
+  color: white;
+}
 .move-list { list-style: none; padding: 0; margin: 0; }
 .move-list li {
   display: grid;
@@ -1153,6 +1194,66 @@ textarea:focus, input:focus { outline: 2px solid var(--accent-2); outline-offset
   color: var(--accent);
   border: 1px solid rgba(106, 169, 255, 0.35);
 }
+
+/* Book recommendation chips — one per book line suggesting a move at this
+   position. Warm accent so it reads distinct from the opening chip. */
+.book-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  vertical-align: middle;
+}
+.book-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(245, 192, 96, 0.15);
+  color: #f5c060;
+  border: 1px solid rgba(245, 192, 96, 0.35);
+  cursor: pointer;
+  user-select: none;
+}
+.book-chip:hover { background: rgba(245, 192, 96, 0.28); }
+.book-chip .book-chip-name {
+  color: var(--dim);
+  font-weight: 500;
+  font-size: 10px;
+}
+.book-chip .book-chip-nag { color: var(--bad); font-weight: 700; }
+.book-chip .book-chip-side {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  border: 1px solid #888;
+}
+.book-chip .book-chip-side.w { background: #f1f3f5; }
+.book-chip .book-chip-side.b { background: #0f1115; }
+.book-chip-comment {
+  display: block;
+  font-size: 11px;
+  color: var(--dim);
+  font-weight: 400;
+  margin-top: 2px;
+  padding-left: 4px;
+}
+
+/* Book flag rendered inline with a candidate move's PV — marks engine
+   candidates that match a book recommendation at the current position. */
+.book-flag {
+  display: inline-block;
+  font-size: 10px;
+  margin-right: 4px;
+  color: #f5c060;
+  cursor: help;
+}
+.cand-row.is-book { background: rgba(245, 192, 96, 0.06); border-radius: 4px; }
+/* And the same for the primary best-move / best-line rows when they
+   happen to match a book recommendation. */
+.engine-block .book-flag { vertical-align: middle; }
 
 .footer {
   padding: 12px 20px;

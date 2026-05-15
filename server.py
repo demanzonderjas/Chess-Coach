@@ -37,6 +37,7 @@ else:
 
 from cache import AnalysisCache
 from library import Library
+from book import Book
 
 
 # --- Config -----------------------------------------------------------------
@@ -133,6 +134,18 @@ except Exception as e:
     print(f"  ! Could not open library: {e}\n"
           f"  ! Library is disabled. PGNs will not be auto-saved.")
     _library = None
+
+# --- Book (opening-theory recommendations). Optional — server boots even if it fails. ---
+try:
+    _book = Book()
+    _book_stats = _book.stats()
+    print(f"Book opened at {_book.db_path} "
+          f"({_book_stats['lines']} lines, {_book_stats['moves']} moves, "
+          f"{_book_stats['positions']} positions)")
+except Exception as e:
+    print(f"  ! Could not open book: {e}\n"
+          f"  ! Book lookups are disabled.")
+    _book = None
 
 # --- Lc0 setup ---
 _lc0_engine: "Lc0Engine | None" = None
@@ -308,6 +321,29 @@ def ensure_pieces() -> bool:
 # --- App --------------------------------------------------------------------
 
 app = Flask(__name__, static_folder=str(STATIC), static_url_path="/static")
+
+
+# CORS for the book API only. Lets a tab on https://www.chessable.com (or
+# anywhere else) POST directly to /api/book/import_chessable without the
+# cross-tab dance. The rest of the API stays same-origin only — only the
+# book endpoints are intended to be hit from arbitrary pages.
+_CORS_PATHS = ("/api/book/",)
+
+
+@app.after_request
+def _add_cors_headers(resp):
+    if request.path.startswith(_CORS_PATHS):
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Max-Age"] = "3600"
+    return resp
+
+
+@app.route("/api/book/<path:_>", methods=["OPTIONS"])
+def _book_cors_preflight(_):
+    # Empty response with the CORS headers added by _add_cors_headers above.
+    return ("", 204)
 
 
 @app.route("/")
@@ -634,6 +670,238 @@ def library_import_lichess():
     except Exception as e:
         return jsonify({"error": f"Lichess fetch failed: {e}"}), 502
     return jsonify(result)
+
+
+# --- Book API ---------------------------------------------------------------
+# Separate from /api/library/openings. The library tags games against named
+# opening *positions*; the book stores "what move should I play here" rows
+# keyed by FEN, so we can surface recommendations as the user navigates.
+
+def _require_book():
+    if _book is None:
+        return jsonify({"error": "book disabled"}), 503
+    return None
+
+
+@app.route("/api/book/lookup", methods=["GET"])
+def book_lookup():
+    """Return all book moves recommended at this position. Used by the
+    frontend on every position change to drive the BOOK badge + candidate
+    highlight. Cheap: one indexed SQLite query."""
+    err = _require_book()
+    if err: return err
+    fen = (request.args.get("fen") or "").strip()
+    if not fen:
+        return jsonify({"error": "Missing 'fen' query param."}), 400
+    return jsonify({"moves": _book.lookup(fen)})
+
+
+@app.route("/api/book/lookup_batch", methods=["POST"])
+def book_lookup_batch():
+    """Bulk lookup. Body: { fens: [str] }. Response: { results: { fen: [moves] } }."""
+    err = _require_book()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    fens = data.get("fens") or []
+    if not isinstance(fens, list):
+        return jsonify({"error": "fens must be a list"}), 400
+    return jsonify({"results": _book.lookup_batch(fens)})
+
+
+@app.route("/api/book/lines", methods=["GET"])
+def book_list_lines():
+    err = _require_book()
+    if err: return err
+    return jsonify({"lines": _book.list_lines()})
+
+
+@app.route("/api/book/lines/<int:line_id>", methods=["GET"])
+def book_get_line(line_id: int):
+    err = _require_book()
+    if err: return err
+    line = _book.get_line(line_id)
+    if line is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(line)
+
+
+@app.route("/api/book/lines", methods=["POST"])
+def book_create_line():
+    """Create a new line. Accepts EITHER:
+        { name, pgn, color?, source?, source_url?, notes?, include_variations? }
+      OR
+        { name, san_moves: [str], color?, source?, source_url?, notes?,
+          comments?: [str|null], nags?: [str|null], starting_fen?: str }
+    PGN form handles branching variations natively. SAN form is for flat
+    Chessable-screenshot-style ingestion where you've already extracted
+    the moves into a list."""
+    err = _require_book()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    color = data.get("color")
+    if color is not None:
+        color = str(color).lower().strip() or None
+        if color not in (None, "w", "b", "white", "black"):
+            return jsonify({"error": "color must be 'w', 'b', or null"}), 400
+        if color in ("white", "w"): color = "w"
+        elif color in ("black", "b"): color = "b"
+    source = (data.get("source") or "manual").strip() or "manual"
+    source_url = (data.get("source_url") or "").strip() or None
+    notes = (data.get("notes") or "").strip() or None
+
+    pgn_text = (data.get("pgn") or "").strip()
+    san_moves = data.get("san_moves")
+
+    try:
+        if pgn_text:
+            result = _book.create_line_from_pgn(
+                name=name, pgn_text=pgn_text, color=color,
+                source=source, source_url=source_url, notes=notes,
+                include_variations=bool(data.get("include_variations", True)),
+            )
+        elif isinstance(san_moves, list):
+            comments = data.get("comments")
+            nags = data.get("nags")
+            starting_fen = (data.get("starting_fen") or "").strip() or None
+            result = _book.create_line_from_sans(
+                name=name,
+                san_moves=[str(m).strip() for m in san_moves if str(m).strip()],
+                color=color,
+                source=source,
+                source_url=source_url,
+                notes=notes,
+                comments=comments if isinstance(comments, list) else None,
+                nags=nags if isinstance(nags, list) else None,
+                starting_fen=starting_fen,
+            )
+        else:
+            return jsonify({"error": "Provide either 'pgn' or 'san_moves'."}), 400
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(result)
+
+
+@app.route("/api/book/lines/<int:line_id>", methods=["DELETE"])
+def book_delete_line(line_id: int):
+    err = _require_book()
+    if err: return err
+    return jsonify({"ok": _book.delete_line(line_id)})
+
+
+@app.route("/api/book/import_chessable", methods=["POST", "OPTIONS"])
+def book_import_chessable():
+    """One-shot import of a whole Chessable chapter. Body:
+        {
+          "course":      "Grandmaster Gambits: 1.e4 — Part 1",
+          "chapter":     "Theory 1B: 3.Bc4 others",
+          "source_url":  "https://www.chessable.com/course/59936/2/",
+          "color":       "w" | "b" | null,
+          "cards": [
+            {"id": "v10582175", "title": "1 e4 e5 ... #1", "moves": "1.e4 e5 ..."},
+            ...
+          ]
+        }
+
+    Returns:
+        { "inserted": [...], "skipped": [...], "failed": [...] }
+
+    Skip rule: if a `book_lines` row with (name, source_url) already exists,
+    that card is reported as "skipped" with the existing line id — so this
+    endpoint is idempotent. Useful for re-running an ingest after the user
+    has added new variations to a chapter without duplicating existing ones."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+    err = _require_book()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    course = (data.get("course") or "").strip() or "Chessable course"
+    chapter = (data.get("chapter") or "").strip() or "Chessable chapter"
+    source_url = (data.get("source_url") or "").strip() or None
+    color = data.get("color")
+    if color in ("white", "w"): color = "w"
+    elif color in ("black", "b"): color = "b"
+    elif color: color = None
+    cards = data.get("cards") or []
+    if not isinstance(cards, list) or not cards:
+        return jsonify({"error": "cards must be a non-empty list"}), 400
+
+    # Pre-compute existing names for idempotent re-ingestion.
+    existing = {(l["name"], l.get("source_url")) for l in _book.list_lines()}
+
+    inserted: list[dict] = []
+    skipped:  list[dict] = []
+    failed:   list[dict] = []
+    for c in cards:
+        title = (c.get("title") or "").strip()
+        moves = (c.get("moves") or "").strip()
+        vid   = (c.get("id") or "").strip()
+        if not title or not moves:
+            failed.append({"title": title, "error": "missing title or moves"})
+            continue
+        name = f"{chapter} — {title}"
+        if (name, source_url) in existing:
+            skipped.append({"title": title, "name": name, "reason": "already present"})
+            continue
+        pgn = (
+            f'[Event "{course}"]\n'
+            f'[Site "Chessable"]\n'
+            f'[Chapter "{chapter}"]\n'
+            f'[Variation "{title}"]\n'
+            f'[ChessableId "{vid}"]\n\n'
+            f"{moves} *"
+        )
+        try:
+            r = _book.create_line_from_pgn(
+                name=name, pgn_text=pgn, color=color,
+                source="chessable", source_url=source_url,
+                notes=f"{course} → {chapter}. Chessable variation id: {vid}.",
+                include_variations=False,
+            )
+            inserted.append({"title": title, "id": r["id"], "move_count": r["move_count"]})
+        except Exception as e:
+            failed.append({"title": title, "error": str(e)})
+
+    return jsonify({
+        "inserted": inserted,
+        "skipped":  skipped,
+        "failed":   failed,
+        "total":    len(cards),
+    })
+
+
+@app.route("/api/book/lines/<int:line_id>/moves", methods=["POST"])
+def book_append_move(line_id: int):
+    """Append a single SAN move to an existing line. Body:
+        { san, parent_move_id?, comment?, nag? }
+    Used by the manual 'add to book' flow and by my screenshot/Chrome
+    ingestion to grow a line incrementally."""
+    err = _require_book()
+    if err: return err
+    data = request.get_json(silent=True) or {}
+    san = (data.get("san") or "").strip()
+    if not san:
+        return jsonify({"error": "san is required"}), 400
+    try:
+        result = _book.append_move(
+            line_id=line_id,
+            san=san,
+            parent_move_id=data.get("parent_move_id"),
+            comment=(data.get("comment") or "").strip() or None,
+            nag=(data.get("nag") or "").strip() or None,
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(result)
+
+
+@app.route("/api/book/stats", methods=["GET"])
+def book_stats():
+    if _book is None:
+        return jsonify({"enabled": False})
+    return jsonify({"enabled": True, **_book.stats()})
 
 
 COACH_SYSTEM_PROMPT = """You are a chess coach helping an intermediate-to-advanced player improve their decision-making.

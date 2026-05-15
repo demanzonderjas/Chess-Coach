@@ -128,7 +128,13 @@
   <main class="layout">
     <!-- MOVE LIST COLUMN (left) -->
     <section class="moves-col">
-      <h2>Moves</h2>
+      <div class="moves-col-head">
+        <h2>Moves</h2>
+        <button id="saveGameBtn" class="save-game-btn ghost" disabled
+                title="Make a few moves first, then save the game to your library">
+          💾 Save
+        </button>
+      </div>
       <ol id="moveList" class="move-list"></ol>
     </section>
 
@@ -190,6 +196,10 @@
         <div class="line hidden" id="openingChipRow">
           <span class="k">Opening:</span>
           <span class="opening-chip" id="openingChip">—</span>
+        </div>
+        <div class="line hidden" id="bookChipRow">
+          <span class="k">Book:</span>
+          <span class="book-chips" id="bookChips"></span>
         </div>
         <div class="line"><span class="k">Move:</span> <span id="curMove">—</span></div>
         <div class="line"><span class="k">Side to move:</span> <span id="sideToMove">—</span></div>

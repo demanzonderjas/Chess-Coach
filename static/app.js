@@ -94,6 +94,9 @@
     addOpeningError: $("addOpeningError"),
     openingChipRow: $("openingChipRow"),
     openingChip: $("openingChip"),
+    // Book moves (opening-theory recommendations from book.db)
+    bookChipRow: $("bookChipRow"),
+    bookChips: $("bookChips"),
 
     // Lichess import
     lichessImportToggle: $("lichessImportToggle"),
@@ -128,6 +131,9 @@
     evalChart: $("evalChart"),
     evalChartWrap: $("evalChartWrap"),
     evalChartTip: $("evalChartTip"),
+
+    // Save-to-library button
+    saveGame: $("saveGameBtn"),
   };
 
   // ---------- State ----------
@@ -206,6 +212,17 @@
     // game — skip the auto-save round-trip so we don't end up POSTing
     // the same game we just GET'd.
     suppressNextAutoSave: false,
+    // Book moves — opening theory recommendations keyed by FEN. Filled
+    // lazily by lookupBookForCurrentPosition() on every position change.
+    // Shape: { fenNorm: string, moves: [{ id, line_id, line_name, line_color,
+    //   san, uci, comment, nag, is_mainline, ... }] }
+    bookHere: null,
+    bookReqId: 0,  // monotonic — discards stale responses if the user navigates
+    // Was the move that led to the CURRENT ply itself a book move? Filled
+    // alongside bookHere via a batched lookup at FEN[ply-1]. Drives the
+    // 📖 badge on the destination square of the just-played move.
+    // Shape: { ply: int, prevFenNorm: string, played: bool, hits: [...] }
+    bookPlayed: null,
   };
 
   /** Side at the bottom of the board — the side the user is most likely
@@ -942,6 +959,10 @@
     STATE.opponentAnalyses.push({});
     STATE.opponentLoading.push(new Set());
     STATE.opponentCancels.push({});
+    // Adding a main-line move invalidates the saved-snapshot match —
+    // the Save button should drop the "✓ Saved" state so the user can
+    // re-save this extended position.
+    STATE.currentLibraryGameId = null;
   }
 
   function startNewGame() {
@@ -1140,6 +1161,7 @@
     }
     highlightCurrentMove();
     renderEvalChart();
+    updateSaveButtonState();
   }
 
   // ---------- Eval timeline chart ----------
@@ -1813,6 +1835,19 @@
     renderClickablePV(bestEl, fen, primary && primary.bestMove ? [primary.bestMove] : null, ply, engineKey, loading);
     renderClickablePV(lineEl, fen, primary && primary.pv && primary.pv.length ? primary.pv.slice(0, 8) : null, ply, engineKey, loading);
 
+    // Book flag on the primary best-move row, when the engine's pick
+    // matches a recommendation from any book line at this position.
+    if (primary && primary.bestMove && isBookMoveHere(fen, primary.bestMove)) {
+      const hits = bookMovesFor(fen, primary.bestMove);
+      const flag = document.createElement("span");
+      flag.className = "book-flag";
+      flag.textContent = "📖";
+      flag.title = "Book: " + hits.map((m) =>
+        `${m.line_name}${m.comment ? " — " + m.comment : ""}`
+      ).join("\n");
+      bestEl.insertBefore(flag, bestEl.firstChild);
+    }
+
     // Alt block: when chaos OR creative is the primary, show the engine's
     // TOP line below so the user can compare the off-axis pick against the
     // objective best.
@@ -1858,6 +1893,8 @@
     others.forEach((c, idx) => {
       const li = document.createElement("li");
       li.className = "cand-row";
+      const isBook = isBookMoveHere(fen, c.bestMove);
+      if (isBook) li.classList.add("is-book");
 
       // Rank chip — actual position in the engine's MultiPV ranking
       // (not the index in `others`, which skipped the primary).
@@ -1885,6 +1922,16 @@
       const lineEl = document.createElement("span");
       lineEl.className = "cand-line";
       renderClickablePV(lineEl, fen, c.pv ? c.pv.slice(0, 6) : null, ply, engineKey, false);
+      if (isBook) {
+        const hits = bookMovesFor(fen, c.bestMove);
+        const flag = document.createElement("span");
+        flag.className = "book-flag";
+        flag.textContent = "📖";
+        flag.title = "Book: " + hits.map((m) =>
+          `${m.line_name}${m.comment ? " — " + m.comment : ""}`
+        ).join("\n");
+        lineEl.insertBefore(flag, lineEl.firstChild);
+      }
       li.appendChild(lineEl);
 
       list.appendChild(li);
@@ -2195,6 +2242,7 @@
       && !(STATE.variation && STATE.variation.source !== "user");
     if (!drawPlans) {
       drawAnnotationOverlay(svg);
+      drawBookPlayedBadge(svg);
       return;
     }
 
@@ -2257,6 +2305,7 @@
 
     // Annotation overlay drawn LAST so it sits on top of any plan arrows.
     drawAnnotationOverlay(svg);
+    drawBookPlayedBadge(svg);
   }
 
   /** Annotation overlay — when viewing a real game ply that has a notable
@@ -2298,6 +2347,58 @@
     // Annotation badge on the destination of the move that was played.
     const dst = squareCenter(mv.to);
     if (dst) drawAnnotationBadge(svg, dst, info);
+  }
+
+  /** 📖 badge on the destination square when the just-played move matches
+   *  a book recommendation at the predecessor FEN. Positioned in the
+   *  TOP-LEFT of the square so it doesn't collide with the annotation badge
+   *  in the top-right. Always called; renders nothing if the move wasn't book. */
+  function drawBookPlayedBadge(svg) {
+    if (STATE.variation) return;          // only on real game plies
+    if (STATE.ply < 1) return;
+    const bp = STATE.bookPlayed;
+    if (!bp || !bp.played) return;
+    if (bp.ply !== STATE.ply) return;     // stale (still in flight for new ply)
+    const mv = STATE.moves[STATE.ply - 1];
+    if (!mv) return;
+    const dst = squareCenter(mv.to);
+    if (!dst) return;
+    const sz = dst.sz;
+    // Top-left corner anchor.
+    const cx = dst.x - sz * 0.30;
+    const cy = dst.y - sz * 0.30;
+    const r  = sz * 0.20;
+
+    const g = document.createElementNS(SVG_NS, "g");
+    g.setAttribute("class", "annot-overlay book-played-badge");
+    // Tooltip — line name(s) the move matches.
+    const titleEl = document.createElementNS(SVG_NS, "title");
+    titleEl.textContent = "Book: " + bp.hits.map((h) =>
+      `${h.line_name}${h.comment ? " — " + h.comment : ""}`
+    ).join("\n");
+    g.appendChild(titleEl);
+
+    const circle = document.createElementNS(SVG_NS, "circle");
+    circle.setAttribute("cx", String(cx));
+    circle.setAttribute("cy", String(cy));
+    circle.setAttribute("r",  String(r));
+    circle.setAttribute("fill", "rgba(245, 192, 96, 0.95)");
+    circle.setAttribute("stroke", "rgba(15, 17, 21, 0.85)");
+    circle.setAttribute("stroke-width", "1.5");
+    g.appendChild(circle);
+
+    // 📖 emoji centered inside the circle. Emoji glyphs render in native
+    // color, so we don't set fill.
+    const text = document.createElementNS(SVG_NS, "text");
+    text.setAttribute("x", String(cx));
+    text.setAttribute("y", String(cy));
+    text.setAttribute("font-size", String(r * 1.6));
+    text.setAttribute("text-anchor", "middle");
+    text.setAttribute("dominant-baseline", "central");
+    text.textContent = "📖";
+    g.appendChild(text);
+
+    svg.appendChild(g);
   }
 
   /** Same rules as updateMoveListAnnotation, factored out so the on-board
@@ -2536,6 +2637,12 @@
     // Eval timeline updates alongside the rest of the move-info panel —
     // active-dot tracking, newly-arrived analyses, classification marks.
     renderEvalChart();
+
+    // Book lookup — fire-and-forget. If the position has theory associated,
+    // the chip row appears and matching engine candidates get a 📖 badge.
+    // The function uses its own request id so navigating away mid-fetch
+    // doesn't leave stale data on screen.
+    lookupBookForCurrentPosition();
   }
 
   function computeClassification(plyAfter) {
@@ -3594,11 +3701,97 @@
       STATE.currentLibraryGameId = data.id || null;
       STATE.currentOpening = data.opening || null;
       updateOpeningChip();
+      updateSaveButtonState();
       const tag = data.opening ? ` · Opening: ${data.opening.name}` : "";
       const dupNote = data.was_duplicate ? " (already saved)" : "";
       appendChat("system", `Saved to library${dupNote}${tag}`);
     } catch (e) {
       console.warn("library: auto-save failed", e);
+    }
+  }
+
+  /** Build a PGN string from STATE.moves with sensible default headers so
+   *  manually-played games get reasonable metadata in the library list.
+   *  Re-builds the position chain through chess.js so move tokens come
+   *  out as proper SAN. */
+  function buildPgnFromState() {
+    const game = new Chess();
+    for (const mv of STATE.moves) {
+      const made = game.move({ from: mv.from, to: mv.to, promotion: mv.promotion });
+      if (!made) break; // shouldn't happen, but bail rather than throw
+    }
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, ".");
+    game.header(
+      "Event",  "Manual Analysis",
+      "Site",   "Chess Coach",
+      "Date",   today,
+      "Round",  "-",
+      "White",  "?",
+      "Black",  "?",
+      "Result", "*"
+    );
+    return game.pgn();
+  }
+
+  /** Persist the current in-memory game to the library. Used by the
+   *  "💾 Save" button next to the Moves header — covers manual / explorer
+   *  games and any extended-from-PGN positions that diverged from the
+   *  auto-saved snapshot. The server dedupes by PGN hash, so re-clicking
+   *  Save on an unchanged game is a no-op. */
+  async function saveCurrentGameToLibrary() {
+    if (!STATE.moves || STATE.moves.length === 0) return;
+    const btn = els.saveGame;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Saving…";
+    }
+    try {
+      const pgn = buildPgnFromState();
+      const res = await fetch("/api/library/games", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pgn, source: "manual" }),
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}${txt ? ": " + txt.slice(0, 120) : ""}`);
+      }
+      const data = await res.json();
+      STATE.currentLibraryGameId = data.id || null;
+      STATE.currentOpening = data.opening || null;
+      updateOpeningChip();
+      setStatus(data.was_duplicate ? "Already in library." : "Saved to library.");
+      // Refresh the library panel if it's open so the row appears
+      // immediately, not on next manual reopen.
+      if (els.libraryPanel && !els.libraryPanel.classList.contains("hidden")) {
+        refreshLibraryGames();
+      }
+    } catch (e) {
+      setStatus("Save failed: " + (e.message || e));
+    } finally {
+      updateSaveButtonState();
+    }
+  }
+
+  /** Sync the Save button's enabled state + label to the current game.
+   *  Disabled when there are no moves to save; "✓ Saved" when the
+   *  current state matches a known library row; "💾 Save" otherwise. */
+  function updateSaveButtonState() {
+    const btn = els.saveGame;
+    if (!btn) return;
+    const hasMoves = STATE.moves && STATE.moves.length > 0;
+    const saved = !!STATE.currentLibraryGameId;
+    btn.disabled = !hasMoves;
+    btn.classList.toggle("is-saved", saved && hasMoves);
+    if (!hasMoves) {
+      btn.textContent = "💾 Save";
+      btn.title = "Make a few moves first, then save the game to your library";
+    } else if (saved) {
+      btn.textContent = "✓ Saved";
+      btn.title = "This game is already in your library. Click 📚 Library to find it.";
+    } else {
+      btn.textContent = "💾 Save";
+      btn.title = "Save this game to your library so it appears under 📚 Library";
     }
   }
 
@@ -3611,6 +3804,179 @@
     } else {
       els.openingChipRow.classList.add("hidden");
     }
+  }
+
+  /** Normalize a FEN to the same canonicalization the book uses on the
+   *  server — first 4 fields only (drop halfmove clock + fullmove num). */
+  function bookNormalizeFen(fen) {
+    if (!fen) return "";
+    const parts = fen.trim().split(/\s+/);
+    return parts.slice(0, 4).join(" ");
+  }
+
+  /** Look up book moves for the currently displayed position AND the
+   *  predecessor position (so we can answer "was the move just played a
+   *  book move?"). Both in a single batched request. Stale responses are
+   *  discarded via a monotonic request id, so a fast click-through doesn't
+   *  end with the wrong book info on screen. */
+  async function lookupBookForCurrentPosition() {
+    if (!els.bookChipRow || !els.bookChips) return;
+    const fen = currentDisplayedFen();
+    const fenNorm = bookNormalizeFen(fen);
+    // Predecessor FEN — only meaningful on a real game ply (not in an
+    // engine PV preview or user sideline). When that's not the case, we
+    // skip the prev-FEN lookup; the played-book badge only shows on real
+    // game moves anyway.
+    const prevFen = (!STATE.variation && STATE.ply >= 1)
+      ? STATE.positions[STATE.ply - 1] : null;
+    const prevFenNorm = prevFen ? bookNormalizeFen(prevFen) : null;
+    const playedMove = (!STATE.variation && STATE.ply >= 1)
+      ? STATE.moves[STATE.ply - 1] : null;
+
+    const reqId = ++STATE.bookReqId;
+    try {
+      // Batched fetch: cuts the two-FEN case to one round trip.
+      const fens = prevFen ? [fen, prevFen] : [fen];
+      const res = await fetch("/api/book/lookup_batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fens }),
+      });
+      if (reqId !== STATE.bookReqId) return; // user navigated; drop
+      if (!res.ok) {
+        // 503 (book disabled) is the common case — silently skip.
+        STATE.bookHere = { fenNorm, moves: [] };
+        STATE.bookPlayed = null;
+      } else {
+        const data = await res.json().catch(() => ({}));
+        if (reqId !== STATE.bookReqId) return;
+        const results = data.results || {};
+        STATE.bookHere = { fenNorm, moves: results[fenNorm] || [] };
+        // Check if the move just played matches any book recommendation
+        // at the predecessor FEN. UCI comparison so promotion is captured.
+        if (prevFenNorm && playedMove) {
+          const playedUci = playedMove.from + playedMove.to + (playedMove.promotion || "");
+          const prevHits = results[prevFenNorm] || [];
+          const matchingHits = prevHits.filter((m) =>
+            m.uci === playedUci || m.uci === playedUci.slice(0, 4)
+          );
+          STATE.bookPlayed = {
+            ply: STATE.ply,
+            prevFenNorm,
+            played: matchingHits.length > 0,
+            hits: matchingHits,
+          };
+        } else {
+          STATE.bookPlayed = null;
+        }
+      }
+    } catch (e) {
+      if (reqId !== STATE.bookReqId) return;
+      STATE.bookHere = { fenNorm, moves: [] };
+      STATE.bookPlayed = null;
+    }
+    renderBookChips();
+    // Re-render engine blocks so book-flags get drawn next to matching
+    // candidates. Skip in sideline mode (engine blocks render off the tip).
+    renderEngineBlock("sf",  STATE.ply, currentDisplayedFen(), currentSideToMove());
+    renderEngineBlock("lc0", STATE.ply, currentDisplayedFen(), currentSideToMove());
+    // Re-draw the plan-arrow / annotation overlay so the 📖 badge on the
+    // played move's destination square refreshes alongside the rest.
+    renderPlanArrows();
+  }
+
+  /** True if (fen, uci) is recommended by ANY book line at this position.
+   *  Used to flag engine candidates in the move-info panel. */
+  function isBookMoveHere(fen, uci) {
+    if (!STATE.bookHere || !uci) return false;
+    if (STATE.bookHere.fenNorm !== bookNormalizeFen(fen)) return false;
+    return STATE.bookHere.moves.some((m) => m.uci === uci);
+  }
+
+  /** Return the matching book entries for (fen, uci) — possibly multiple
+   *  lines recommending the same move. Used to build hover-text on the
+   *  book-flag. */
+  function bookMovesFor(fen, uci) {
+    if (!STATE.bookHere || !uci) return [];
+    if (STATE.bookHere.fenNorm !== bookNormalizeFen(fen)) return [];
+    return STATE.bookHere.moves.filter((m) => m.uci === uci);
+  }
+
+  /** Render the "Book: …" chip row in the move-info panel. One chip per
+   *  recommended move at the current position; multiple lines recommending
+   *  the same move collapse into a single chip (with all line names in
+   *  the tooltip). Click a chip to preview that move as an engine variation. */
+  function renderBookChips() {
+    if (!els.bookChips || !els.bookChipRow) return;
+    const here = STATE.bookHere;
+    const fen = currentDisplayedFen();
+    els.bookChips.innerHTML = "";
+    if (!here || !here.moves || !here.moves.length || here.fenNorm !== bookNormalizeFen(fen)) {
+      els.bookChipRow.classList.add("hidden");
+      return;
+    }
+    // Group by uci so the same move from multiple lines = one chip.
+    const byUci = new Map();
+    for (const m of here.moves) {
+      if (!byUci.has(m.uci)) byUci.set(m.uci, []);
+      byUci.get(m.uci).push(m);
+    }
+    for (const [uci, group] of byUci) {
+      const chip = document.createElement("span");
+      chip.className = "book-chip";
+      // Tooltip: all line names + comments
+      const tooltipBits = group.map((m) => {
+        const c = m.line_color ? `[${m.line_color.toUpperCase()}] ` : "";
+        const note = m.comment ? ` — ${m.comment}` : "";
+        return `${c}${m.line_name}${note}`;
+      });
+      chip.title = tooltipBits.join("\n");
+
+      // Side dot if all lines in the group agree on a color
+      const colors = new Set(group.map((m) => m.line_color).filter(Boolean));
+      if (colors.size === 1) {
+        const dot = document.createElement("span");
+        dot.className = `book-chip-side ${[...colors][0]}`;
+        chip.appendChild(dot);
+      }
+
+      // SAN
+      const san = document.createElement("span");
+      san.textContent = group[0].san;
+      chip.appendChild(san);
+
+      // NAG glyph (!/?/!! etc) if present on any group member
+      const nag = group.map((m) => m.nag).filter(Boolean)[0];
+      if (nag) {
+        const ng = document.createElement("span");
+        ng.className = "book-chip-nag";
+        ng.textContent = nag;
+        chip.appendChild(ng);
+      }
+
+      // Line name(s) — show first line, with "+N more" if multiple agree
+      const nameEl = document.createElement("span");
+      nameEl.className = "book-chip-name";
+      nameEl.textContent = group.length === 1
+        ? group[0].line_name
+        : `${group[0].line_name} +${group.length - 1}`;
+      chip.appendChild(nameEl);
+
+      // Click → preview this move as an engine-style variation so the board
+      // jumps to the resulting position. Only enabled when we're on the main
+      // line — entering a fresh variation from inside a user sideline gets
+      // messy and isn't worth it for a v1.
+      if (!inUserSideline()) {
+        chip.addEventListener("click", () => {
+          try { enterVariation(STATE.ply, [uci], "sf", 1); } catch (_) {}
+        });
+      } else {
+        chip.style.cursor = "default";
+      }
+
+      els.bookChips.appendChild(chip);
+    }
+    els.bookChipRow.classList.remove("hidden");
   }
 
   /** Parse SAN string from the "Add Opening" form, validate with chess.js,
@@ -3653,6 +4019,9 @@
       startNewGame();
     });
     els.analyzeAll.addEventListener("click", analyzeAll);
+    if (els.saveGame) {
+      els.saveGame.addEventListener("click", saveCurrentGameToLibrary);
+    }
     if (els.deepDive) {
       els.deepDive.addEventListener("click", () => {
         deepDiveCurrentPosition();
@@ -4037,6 +4406,7 @@
     // Render the empty-state chart immediately so the panel reads as
     // "this is where the eval timeline will appear" before any analysis.
     renderEvalChart();
+    updateSaveButtonState();
     setStatus("loading config…");
 
     const h = await fetch("/healthz").then(r => r.json()).catch(() => ({}));
